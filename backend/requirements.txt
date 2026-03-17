@@ -1,0 +1,6 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+aiosqlite==0.19.0
+python-multipart==0.0.6
+# 👇 这里的 [socks] 就是让 httpx 支持代理的魔法核心！
+httpx[socks]==0.25.1
