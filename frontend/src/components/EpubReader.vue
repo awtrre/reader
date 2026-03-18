@@ -277,18 +277,51 @@ const summonReference = async (query) => {
 // ==========================================
 // 4. 分页与排版 (计算虚拟页码 - 原始版)
 // ==========================================
-const generatePagination = async () => {
+// 增加一个防抖计时器，避免滚动太快把数据库点爆
+let saveTimer = null;
+
+const saveProgressToBackend = (cfi, progress) => {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    // 这里的 URL 必须对应后端 main.py 定义的路由
+    fetch(`/api/books/${props.book.id}/progress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        cfi: cfi, 
+        percentage: progress 
+      })
+    });
+  }, 2000); // 停止翻页 2 秒后才真正写入后端的 library.db 数据库 [cite: 5]
+};
+
+const generatePagination = async (savedCfi) => {
   if (!epubBook) return;
 
-  // 1. 每 1600 字符算作一页 (原始精度)
-  await epubBook.locations.generate(1600);
+  // 1. 后台开始生成虚拟页码 (不阻塞主界面)
+  await epubBook.locations.generate(600);
   totalPages.value = epubBook.locations.total;
 
-  // 2. 原始的监听逻辑：只更新本地显示，不发请求给后端
-  rendition.on('relocated', (location) => {
-    let rawPage = epubBook.locations.percentageFromCfi(location.start.cfi);
-    currentPage.value = Math.round(rawPage * totalPages.value) || 1;
+  // 2. 计算完成后，强制校准一次当前页码
+  // 如果没有 savedCfi，就拿当前正在显示的位置算
+  const currentCfi = savedCfi || (rendition.currentLocation()?.start?.cfi);
+  if (currentCfi) {
+    const progress = epubBook.locations.percentageFromCfi(currentCfi);
+    currentPage.value = Math.round(progress * totalPages.value) || 1;
     inputPage.value = currentPage.value;
+  }
+
+  // 3. 监听位置变动 (每次滚动结束都会触发)
+  rendition.on('relocated', (location) => {
+    const cfi = location.start.cfi;
+    const progress = epubBook.locations.percentageFromCfi(cfi);
+    
+    // 更新本地页码显示状态
+    currentPage.value = Math.round(progress * totalPages.value) || 1;
+    inputPage.value = currentPage.value;
+
+    // 核心：调用防抖存盘函数，把位置记在服务器的 library.db 里 [cite: 5]
+    saveProgressToBackend(cfi, progress);
   });
 };
 
