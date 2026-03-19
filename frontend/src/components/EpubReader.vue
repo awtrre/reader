@@ -241,7 +241,12 @@ onUnmounted(() => {
  
 const initReader = async () => {
   // 1. 获取进度
-  const res = await fetch(`/api/books/${props.book.id}/progress`);
+  const res = await fetch(`/api/books/${props.book.id}/progress`, {
+    headers: {
+      'user-token': localStorage.getItem('geek_token') || '',
+      'guest-uuid': localStorage.getItem('guest_uuid') || ''
+    }
+  });
   const data = await res.json();
   const savedCfi = data.cfi;
 
@@ -429,16 +434,19 @@ let saveTimer = null;
 const saveProgressToBackend = (cfi, progress) => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    // 这里的 URL 必须对应后端 main.py 定义的路由
     fetch(`/api/books/${props.book.id}/progress`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'user-token': localStorage.getItem('geek_token') || '', // 注入身份 [cite: 4]
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      },
       body: JSON.stringify({ 
         cfi: cfi, 
         percentage: progress 
       })
     });
-  }, 2000); // 停止翻页 2 秒后才真正写入后端的 library.db 数据库 [cite: 5]
+  }, 2000); 
 };
 
 const generatePagination = async (savedCfi) => {
@@ -486,6 +494,17 @@ const cycleFontSize = () => {
   const currentIndex = sizes.indexOf(currentFontSize.value);
   currentFontSize.value = sizes[(currentIndex + 1) % sizes.length];
   rendition.themes.fontSize(`${currentFontSize.value}%`);
+  
+  // ✨ 新增：同步保存字号到后端用户偏好 (layout_prefs) [cite: 5]
+  fetch('/api/user/prefs', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'user-token': localStorage.getItem('geek_token') || '',
+      'guest-uuid': localStorage.getItem('guest_uuid') || ''
+    },
+    body: JSON.stringify({ font_size: currentFontSize.value })
+  });
 };
 
 // ==========================================

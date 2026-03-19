@@ -91,7 +91,7 @@ const checkIdentity = () => {
 };
 
 // 修复回车触发逻辑
-const executeCommand = () => {
+const executeCommand = async () => { // 加上 async
   const query = searchQuery.value.trim();
   if (!query) return;
 
@@ -99,26 +99,40 @@ const executeCommand = () => {
 
   if (loginMatch) {
     const username = loginMatch[1];
-    console.log(`🪄 收到登录指令！欢迎：${username}`);
-    localStorage.setItem('geek_token', 'fake_token_123');
-    isGuest.value = false;
-    fetchBookshelf();
-    searchQuery.value = ''; // 执行完清空输入框
+    const password = loginMatch[2];
+    
+    try {
+      // 🔮 向后端发起真正的契约绑定请求 [cite: 4]
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      
+      if (data.status === 'success') {
+        localStorage.setItem('geek_token', data.token); // 存储后端返回的真实 Token
+        isGuest.value = false;
+        await fetchBookshelf(); // 立即切换到正式账号的书架
+        searchQuery.value = '';
+        console.log(`✨ 欢迎回来，${username}！`);
+      }
+    } catch (e) {
+      console.error("身份校验失败:", e);
+    }
     return;
   }
 
   if (query === '/logout') {
-    console.log('🚪 断开连接...');
     localStorage.removeItem('geek_token');
     isGuest.value = true;
-    bookshelf.value = [];
-    fetchBookshelf();
+    // 👻 登出后，fetchBookshelf 会因为没有 token 而自动回退到 guest-uuid 对应的匿名书架
+    await fetchBookshelf(); 
     searchQuery.value = '';
+    console.log('🚪 已切回游客模式，匿名书架已找回。');
     return;
   }
-
-  console.log(`🔍 正在搜索：${query}`);
-  searchQuery.value = ''; // 模拟搜索后清空
+  // ... 其他搜索逻辑
 };
 
 const API_BASE = 'http://127.0.0.1:8000'; // 替换成你树莓派的实际 IP 和端口

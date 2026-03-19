@@ -115,18 +115,19 @@ const handleFileUpload = async (event) => {
   formData.append('file', file);
 
   try {
-    // ❌ 之前的错误路径: const response = await fetch(`${API_BASE}/api/books/upload`, {
-    
-    // ✅ 修复后：去掉 API_BASE，直接使用相对路径！
+    // 🌟 核心修复：在这里加上 headers，亮出你的身份令牌！
     const response = await fetch('/api/books/upload', {
       method: 'POST',
+      headers: {
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      },
       body: formData,
     });
 
     const result = await response.json();
     console.log('炼金炉反馈:', result.message);
 
-    // 如果上传成功或者进入后台处理，通知 App.vue 刷新书架
     if (result.status === 'success' || result.status === 'processing') {
       emit('refreshBookshelf');
     }
@@ -134,10 +135,8 @@ const handleFileUpload = async (event) => {
     console.error('💥 魔法通道崩塌，上传失败:', error);
   }
 
-  // 清除 input，确保再次选择同一个文件能触发 change 事件
   event.target.value = null;
 };
-
 // ==========================================
 // 3. 菜单操作逻辑
 // ==========================================
