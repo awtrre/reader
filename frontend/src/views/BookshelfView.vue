@@ -145,9 +145,39 @@ const showBookDetails = () => {
   showActionMenu.value = false;
 };
 
-const deleteBook = () => {
-  console.log(`🗑️ 彻底抹除: ${selectedBook.value.title}`);
-  // TODO: 这里之后也要换成真实的 fetch DELETE 请求
-  showActionMenu.value = false;
+const deleteBook = async () => {
+  if (!selectedBook.value) return;
+
+  const bookId = selectedBook.value.id;
+  const bookTitle = selectedBook.value.title;
+  console.log(`🗑️ 准备彻底抹除: ${bookTitle}`);
+
+  try {
+    // 🌟 核心修复：向后端发送毁灭打击，并亮出身份令牌
+    const response = await fetch(`/api/books/${bookId}`, {
+      method: 'DELETE',
+      headers: {
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      }
+    });
+
+    const result = await response.json();
+
+    if (result.status === 'success') {
+      console.log(`✨ 抹除成功: ${result.message}`);
+      // 成功后，呼叫父组件重新拉取书架数据，书籍就会瞬间消失！
+      emit('refreshBookshelf');
+    } else {
+      console.error('💥 抹除失败:', result.message);
+      alert("删除失败：" + result.message);
+    }
+  } catch (error) {
+    console.error('💥 魔法通道崩塌，删除请求失败:', error);
+  } finally {
+    // 无论成功还是失败，最后都要关闭操作菜单，并清空选中状态
+    showActionMenu.value = false;
+    selectedBook.value = null; 
+  }
 };
 </script>

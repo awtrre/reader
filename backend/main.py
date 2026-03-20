@@ -283,11 +283,44 @@ async def upload_magic_book(
     return {"status": "success", "message": "上传成功！原汁原味呈现！"}
 
 @app.delete("/api/books/{book_id}")
-async def delete_book(book_id: str):
-    """彻底抹除书籍存在的痕迹"""
-    # TODO: 从数据库删除记录，并物理删除 data 目录下的文件
-    return {"status": "success", "message": "该书籍已从宇宙中彻底抹除！"}
+async def delete_book(
+    book_id: str,
+    user_token: Optional[str] = Header(None),
+    guest_uuid: Optional[str] = Header(None)
+):
+    """彻底抹除书籍存在的痕迹（包含数据库记录和物理文件）"""
+    db_path = "/app/data/library.db"
+    
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            # 1. 验证身份，获取对应的 user_id
+            user_id = await get_current_user_id(db, user_token, guest_uuid)
 
+            # 2. 在删除记录前，先查出文件的物理路径
+            cursor = await db.execute("SELECT file_path FROM books WHERE id = ?", (book_id,))
+            book_record = await cursor.fetchone()
+
+            if book_record:
+                file_path = book_record[0]
+                # 3. 物理删除文件 (使用 os.path.exists 增加安全判定，防止文件不存在导致报错)
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"🗑️ 物理文件已粉碎: {file_path}")
+
+            # 4. 解除灵魂羁绊：从 user_books 表中删除用户的阅读记录和关联
+            await db.execute("DELETE FROM user_books WHERE user_id = ? AND book_id = ?", (user_id, book_id))
+            
+            # 5. 摧毁本体：从 books 表中彻底删除书籍信息
+            await db.execute("DELETE FROM books WHERE id = ?", (book_id,))
+
+            # 统一提交魔法契约
+            await db.commit()
+
+        return {"status": "success", "message": "该书籍已从宇宙中彻底抹除！"}
+        
+    except Exception as e:
+        print(f"💥 删除魔法失败: {e}")
+        raise HTTPException(status_code=500, detail="删除失败，残余魔法能量干扰！")
 # -----------------------------------------------------------------
 # 📖 沉浸式阅读小工具 (字典 & 维基反代)
 # -----------------------------------------------------------------
