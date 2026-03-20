@@ -87,6 +87,11 @@ const searchResults = ref([]);
 const isGuest = ref(true);
 const searchQuery = ref('');
 
+// ✨ 引擎点火：当网页一打开，立刻执行身份核验和拉取书架！
+onMounted(() => {
+  checkIdentity();
+  fetchBookshelf();
+});
 
 const toggleTab = () => {
   if (activeTab.value === 'bookstore') {
