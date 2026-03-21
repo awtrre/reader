@@ -241,7 +241,11 @@ onUnmounted(() => {
 });
  
 const initReader = async () => {
-  // 1. 获取进度
+  // 【优化 1：并行初始化】
+  // 提前触发 ePub 实例加载，不要等 API 进度接口拉完再开始请求 EPUB 文件
+  epubBook = ePub(`/api/static/books/${props.book.id}.epub`);
+
+  // 同时获取用户阅读进度
   const res = await fetch(`/api/books/${props.book.id}/progress`, {
     headers: {
       'user-token': localStorage.getItem('geek_token') || '',
@@ -251,40 +255,34 @@ const initReader = async () => {
   const data = await res.json();
   const savedCfi = data.cfi;
 
-  // 2. 初始化书籍
-  epubBook = ePub(`/api/static/books/${props.book.id}.epub`);
-  // ==========================================
-  // 3. 恢复为稳定且清爽的滚动模式
+  // 恢复滚动模式
   rendition = epubBook.renderTo(viewer.value, {
     width: '100%',
     height: '100%',
-    flow: 'scrolled-doc', // ⬅️ 回到滚动模式
+    flow: 'scrolled-doc',
     manager: 'continuous'
   });
-  // 第4步：再注册 Hook，劫持图片
+
+  // 注册 Hook，劫持图片 (保持你的原逻辑不变)
   rendition.hooks.content.register((contents) => {
     const doc = contents.document;
     const mediaElements = doc.querySelectorAll('img, svg, video');
 
     const snapToGrid = (el) => {
       const lh = currentLineHeightPx.value || 26; 
-      
-      // 优先读取 HTML 原生属性 height，防止图片未加载时高度为 0
       let rawHeight = parseFloat(el.getAttribute('height')) || el.naturalHeight || el.clientHeight || lh * 10;
       if (!rawHeight || rawHeight === 0) return;
 
-      // 四舍五入到最近的行高整数倍
       let snappedHeight = Math.round(rawHeight / lh) * lh;
       if (snappedHeight < lh) snappedHeight = lh;
 
-      // 使用 cssText 进行霸道覆盖，确保绝对不留一丝死角
       el.style.cssText = `
         display: block !important;
         height: ${snappedHeight}px !important;
         width: auto !important;
         max-width: 100% !important;
         max-height: none !important;
-        margin: 0 auto ${lh}px auto !important; /* 强制图片底部必须是 1 倍行高 */
+        margin: 0 auto ${lh}px auto !important;
         padding: 0 !important;
         border: none !important;
         box-sizing: border-box !important;
@@ -301,15 +299,23 @@ const initReader = async () => {
       }
     });
   });
-// 5. 恢复你最开始的干净主题，并加入段落约束
+
   applyTheme();
- // 6. 🚀 执行渲染：文字出来后再跑分页，防止灰屏 
+
+  // 🚀 执行渲染
   rendition.display(savedCfi || undefined).then(() => {
-    console.log("🪄 文字已加载，后台开始计算分页...");
-    generatePagination(savedCfi);
+    console.log("🪄 文字DOM已就绪，准备渲染...");
+    
+    // 【优化 2：宏任务让渡 (核心修复)】
+    // 使用 setTimeout 将耗时的分页计算变成宏任务 (Macrotask)。
+    // 这强制要求 JavaScript 引擎先挂起代码执行，让浏览器把 iframe 里的文字先画到屏幕上。
+    setTimeout(() => {
+      console.log("⏳ 画面已渲染，后台开始计算分页...");
+      generatePagination(savedCfi);
+    }, 150); // 留出 150ms 的缓冲时间给浏览器完成绘制
   });
 
-    // 监听选中事件
+  // 监听选中事件
   rendition.on('selected', handleSelection);
   setupIframeClick();
 };

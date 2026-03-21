@@ -6,13 +6,6 @@
       <header class="flex flex-col md:flex-row items-center justify-between py-12 gap-6 relative">
         
         <div class="flex-1 flex justify-start">
-          <button 
-            v-if="activeTab !== 'bookshelf'" 
-            @click="resetToHome"
-            class="flex items-center gap-2 text-[10px] md:text-xs font-bold tracking-[0.2em] text-neutral-500 hover:text-neutral-100 transition-colors duration-300"
-          >
-            <span class="text-lg">‹</span> BACK
-          </button>
         </div>
         
         <h1 
