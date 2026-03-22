@@ -193,7 +193,8 @@ onUnmounted(() => {
 });
 
 const initReader = async () => {
-  epubBook = ePub(`/api/static/books/${props.book.id}.epub`);
+  // 新代码：直接读取解压后的文件夹路径
+  epubBook = ePub(`/api/static/books/${props.book.id}/`);
 
   // 获取进度
   const res = await fetch(`/api/books/${props.book.id}/progress`, {

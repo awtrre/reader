@@ -4,9 +4,10 @@ services:
     image: nginx:alpine
     container_name: library_frontend
     ports:
-      - "8880:80"
+      - "80:80"
     volumes:
       - ./frontend/dist:/usr/share/nginx/html  # 殿下编译好的 Vue/React 静态文件放这里
+      - ./data:/app/data
       - ./nginx.conf:/etc/nginx/nginx.conf     # Nginx 配置文件
     restart: unless-stopped
     depends_on:
@@ -23,6 +24,7 @@ services:
     volumes:
       - ./backend:/app
       - ./data:/app/data  # SQLite 数据库和你的原始书库都存在这里哦
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TTS_API_URL=http://tts:10200
       - TZ=Asia/Shanghai

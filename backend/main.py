@@ -1,3 +1,8 @@
+import docker
+import zipfile 
+import shutil
+import asyncio
+from pathlib import Path
 from contextlib import asynccontextmanager
 from database import init_db 
 import uuid
@@ -51,7 +56,40 @@ class AuthRequest(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     voice: Optional[str] = "zh_CN-huayan-medium"
+# -----------------------------------------------------------------
+# 🛠️ 炼金工坊核心工具：EPUB 爆破术
+# -----------------------------------------------------------------
+def _sync_extract_epub(source_path: str, target_dir: str, remove_source: bool = True):
+    """
+    同步解压逻辑：将 EPUB 文件解压为网页文件夹。
+    如果解压失败会自动清理残留文件。
+    """
+    os.makedirs(target_dir, exist_ok=True)
+    try:
+        with zipfile.ZipFile(source_path, 'r') as zip_ref:
+            zip_ref.extractall(target_dir)
+        
+        if remove_source and os.path.exists(source_path):
+            os.remove(source_path) # 阅后即焚
+            
+    except Exception as e:
+        print(f"💥 爆破解压失败: {e}")
+        # 如果解压到一半报错，为了防止产生脏数据，把生成的残缺文件夹直接抹除
+        if os.path.exists(target_dir):
+            shutil.rmtree(target_dir)
+        raise Exception(f"魔法书结构损坏: {str(e)}")
 
+async def extract_epub_to_folder(source_path: str, book_id: str, remove_source: bool = True) -> str:
+    """
+    异步包装器：防止树莓派 CPU 解压时阻塞其他用户的网络请求
+    返回解压后的最终文件夹路径
+    """
+    target_dir = f"/app/data/books/{book_id}"
+    
+    # 将同步的解压 I/O 任务推入后台线程池执行
+    await asyncio.to_thread(_sync_extract_epub, source_path, target_dir, remove_source)
+    
+    return target_dir
 # -----------------------------------------------------------------
 # 🕵️‍♂️ 极客身份验证模块 (处理 /login 和 /logout)
 # -----------------------------------------------------------------
@@ -248,23 +286,35 @@ async def upload_magic_book(
     user_token: Optional[str] = Header(None),
     guest_uuid: Optional[str] = Header(None)
 ):
-    """处理书籍上传，并真正将其写入记忆中枢！"""
     file_ext = Path(file.filename).suffix.lower()
-    book_id = str(uuid.uuid4()) # 生成唯一的魔法编号
-    
-    # 为了防止同名文件冲突，保存时加上 ID
+    book_id = str(uuid.uuid4())
     save_filename = f"{book_id}{file_ext}"
     title = Path(file.filename).stem
 
-    # 💡 核心修复：智能分流传送阵
+    # 1. 第一步：无论是啥格式，先暂存到 /raw_books 目录
+    os.makedirs("/app/data/raw_books", exist_ok=True)
+    temp_path = f"/app/data/raw_books/{save_filename}"
+    
+    with open(temp_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # 2. 第二步：根据格式分流
     if file_ext == '.epub':
-        # 已经是完美的 epub，直接送入藏书阁
-        target_dir = "/app/data/books"
+        # 🌟 如果本来就是 EPUB，直接调用封装好的爆破术！
+        try:
+            # remove_source=True 代表解压完就把 /raw_books 里的 .epub 删掉，节约树莓派宝贵的 SD 卡空间
+            final_path = await extract_epub_to_folder(temp_path, book_id, remove_source=True)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
         format_type = "epub"
+        save_path = final_path # 数据库里记录这个解压后的文件夹路径
     else:
-        # 其他格式，先扔进原料库准备炼金转换
-        target_dir = "/app/data/raw_books"
+        # 🌟 如果是 txt/mobi/pdf 等，原文件留在 /raw_books，等待后台 Calibre 炼金炉处理
+        save_path = temp_path
         format_type = file_ext.replace('.', '')
+        # 添加后台转换任务 (传入源文件路径 和 book_id)
+        background_tasks.add_task(convert_to_epub_task, temp_path, book_id)
 
     # 🛡️ 加一层护盾：确保目录存在，防止 500 报错
     os.makedirs(target_dir, exist_ok=True)
