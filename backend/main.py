@@ -90,6 +90,64 @@ async def extract_epub_to_folder(source_path: str, book_id: str, remove_source: 
     await asyncio.to_thread(_sync_extract_epub, source_path, target_dir, remove_source)
     
     return target_dir
+async def convert_to_epub_task(source_file_path: str, book_id: str):
+    """
+    后台炼金炉：指挥 Calibre 容器将 TXT/MOBI/AZW3 转为 EPUB，随后自动爆破。
+    """
+    print(f"🔥 正在召唤 Calibre 炼金炉处理: {source_file_path}")
+    
+    # 转换后生成的临时 EPUB 路径
+    calibre_output_epub = f"/app/data/raw_books/converted_{book_id}.epub"
+    
+    def run_calibre():
+        # 通过宿主机的 docker.sock 连接容器引擎
+        client = docker.from_env()
+        try:
+            # 找到我们在 docker-compose 里命名的 calibre 容器
+            calibre_container = client.containers.get('library_calibre')
+            
+            # 组装转换命令：ebook-convert <输入路径> <输出路径>
+            cmd = ["ebook-convert", source_file_path, calibre_output_epub]
+            
+            # 在 Calibre 容器内部执行转换
+            exit_code, output = calibre_container.exec_run(cmd)
+            
+            if exit_code != 0:
+                raise Exception(f"Calibre 转换失败: {output.decode('utf-8', errors='ignore')}")
+            return True
+        except Exception as e:
+            raise Exception(f"跨容器调用失败: {str(e)}")
+
+    try:
+        # 1. 执行耗时的转换操作（放入线程池，不阻塞其他用户）
+        await asyncio.to_thread(run_calibre)
+        
+        # 2. 转换成功后，立即调用“爆破术”将其变为静态文件夹 [cite: 5]
+        # remove_source=True 会在解压后删除转换出的那个临时 .epub 文件
+        final_dir = await extract_epub_to_folder(calibre_output_epub, book_id, remove_source=True)
+        
+        # 3. 炼金完成，更新记忆水晶（数据库）中的路径和格式 [cite: 5]
+        from database import DB_PATH
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "UPDATE books SET format = 'epub', file_path = ? WHERE id = ?",
+                (final_dir, book_id)
+            )
+            await db.commit()
+            
+        # 4. 扫尾工作：删除最原始的上传文件（如 .txt 或 .mobi）以节省空间 [cite: 5]
+        if os.path.exists(source_file_path):
+            os.remove(source_file_path)
+            
+        print(f"✨ 炼金成功！书籍 {book_id} 已解压完毕，可供秒开。")
+
+    except Exception as e:
+        print(f"💥 炼金炉故障: {e}")
+        # 如果彻底失败，建议从数据库中抹除该书，防止书架出现永远无法打开的“死书” [cite: 5]
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM user_books WHERE book_id = ?", (book_id,))
+            await db.execute("DELETE FROM books WHERE id = ?", (book_id,))
+            await db.commit()
 # -----------------------------------------------------------------
 # 🕵️‍♂️ 极客身份验证模块 (处理 /login 和 /logout)
 # -----------------------------------------------------------------
@@ -286,80 +344,58 @@ async def upload_magic_book(
     user_token: Optional[str] = Header(None),
     guest_uuid: Optional[str] = Header(None)
 ):
+    """重构版：支持直接爆破 EPUB 或后台异步转换其他格式"""
     file_ext = Path(file.filename).suffix.lower()
     book_id = str(uuid.uuid4())
     save_filename = f"{book_id}{file_ext}"
     title = Path(file.filename).stem
 
-    # 1. 第一步：无论是啥格式，先暂存到 /raw_books 目录
-    os.makedirs("/app/data/raw_books", exist_ok=True)
-    temp_path = f"/app/data/raw_books/{save_filename}"
+    # 1. 统一先存入 raw_books 缓冲区
+    raw_dir = "/app/data/raw_books"
+    os.makedirs(raw_dir, exist_ok=True)
+    temp_path = f"{raw_dir}/{save_filename}"
     
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 2. 第二步：根据格式分流
-    if file_ext == '.epub':
-        # 🌟 如果本来就是 EPUB，直接调用封装好的爆破术！
-        try:
-            # remove_source=True 代表解压完就把 /raw_books 里的 .epub 删掉，节约树莓派宝贵的 SD 卡空间
-            final_path = await extract_epub_to_folder(temp_path, book_id, remove_source=True)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-            
-        format_type = "epub"
-        save_path = final_path # 数据库里记录这个解压后的文件夹路径
-    else:
-        # 🌟 如果是 txt/mobi/pdf 等，原文件留在 /raw_books，等待后台 Calibre 炼金炉处理
-        save_path = temp_path
-        format_type = file_ext.replace('.', '')
-        # 添加后台转换任务 (传入源文件路径 和 book_id)
-        background_tasks.add_task(convert_to_epub_task, temp_path, book_id)
-
-    # 🛡️ 加一层护盾：确保目录存在，防止 500 报错
-    os.makedirs(target_dir, exist_ok=True)
+    # 2. 准备路径和格式
+    format_type = file_ext.replace('.', '')
+    db_save_path = temp_path # 默认先存原始路径
     
-    save_path = f"{target_dir}/{save_filename}"
-
-    # 1. 物理保存文件
-    with open(save_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # 2. 写入数据库！
+    # 3. 数据库预登记
     db_path = "/app/data/library.db"
     async with aiosqlite.connect(db_path) as db:
-        # 第一步：获取当前用户的 ID 和身份
         user_id = await get_current_user_id(db, user_token, guest_uuid)
         cursor = await db.execute("SELECT is_guest FROM users WHERE id = ?", (user_id,))
         user_info = await cursor.fetchone()
-        is_guest = user_info[0] if user_info else 1
-        
-        # 匿名游客默认 public(1)，注册用户默认 private(0)
-        is_public = 1 if is_guest else 0
+        is_public = 1 if (user_info and user_info[0]) else 0
 
-        # 第二步：存入书籍基本信息（加上 uploader_id 和 is_public）
         await db.execute(
             "INSERT INTO books (id, title, file_path, format, uploader_id, is_public) VALUES (?, ?, ?, ?, ?, ?)",
-            (book_id, title, save_path, format_type, user_id, is_public)
+            (book_id, title, db_save_path, format_type, user_id, is_public)
         )
-        
-        # 第三步：在灵魂羁绊表中建立关联
         await db.execute(
             "INSERT INTO user_books (user_id, book_id) VALUES (?, ?)",
             (user_id, book_id)
         )
-        
-        # 统一提交，确保两步操作要么都成功，要么都失败（原子性） 
         await db.commit()
-    # 3. 召唤转换大锅炉 (如果需要转换)
-    if file_ext in ['.mobi', '.azw3', '.txt', '.pdf']:
-        # TODO: 这里需要确保 convert_to_epub_task 转换完成后，
-        # 把新生成的 epub 移动到 /app/data/books/，并更新数据库的 file_path！
-        background_tasks.add_task(convert_to_epub_task, save_path, book_id)
-        return {"status": "processing", "message": "已入库！正在后台转为 EPUB..."}
 
-    return {"status": "success", "message": "上传成功！原汁原味呈现！"}
+    # 4. 根据格式决定处理策略
+    if file_ext == '.epub':
+        # 如果是 EPUB，直接在主进程/线程爆破，用户可以立即读
+        final_path = await extract_epub_to_folder(temp_path, book_id, remove_source=True)
+        # 更新数据库为解压后的路径
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("UPDATE books SET file_path = ? WHERE id = ?", (final_path, book_id))
+            await db.commit()
+        return {"status": "success", "message": "EPUB 已就绪，秒开已激活！"}
+    
+    elif file_ext in ['.mobi', '.azw3', '.txt', '.pdf']:
+        # 如果需要转换，丢进后台，让 Calibre 慢慢炼制
+        background_tasks.add_task(convert_to_epub_task, temp_path, book_id)
+        return {"status": "processing", "message": "非 EPUB 格式，后台炼金炉正在努力转换中..."}
 
+    return {"status": "success", "message": "上传成功"}
 @app.delete("/api/books/{book_id}")
 async def delete_book(
     book_id: str,
