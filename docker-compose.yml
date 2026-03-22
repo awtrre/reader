@@ -32,21 +32,6 @@ services:
     depends_on:
       - tts
 
-  # 🏭 格式转换大锅炉：Calibre (通过 LinuxServer 镜像提供 Web 服务和转换引擎)
-  calibre:
-    image: lscr.io/linuxserver/calibre:latest
-    container_name: library_calibre
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Asia/Shanghai
-    volumes:
-      - ./data/calibre_config:/config
-      - ./data/books:/books  # 和后端共享书库目录，方便互相串门！
-    ports:
-      - "8081:8080"          # Calibre 自己的 Web 界面（平时不用可以关掉端口映射）
-    restart: unless-stopped
-
   # 🗣️ 赛博播音员：Piper 本地 TTS
   tts:
     image: rhasspy/wyoming-piper

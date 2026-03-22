@@ -1,3 +1,4 @@
+import subprocess
 import docker
 import zipfile 
 import shutil
@@ -59,75 +60,38 @@ class TTSRequest(BaseModel):
 # -----------------------------------------------------------------
 # 🛠️ 炼金工坊核心工具：EPUB 爆破术
 # -----------------------------------------------------------------
-def _sync_extract_epub(source_path: str, target_dir: str, remove_source: bool = True):
-    """
-    同步解压逻辑：将 EPUB 文件解压为网页文件夹。
-    如果解压失败会自动清理残留文件。
-    """
-    os.makedirs(target_dir, exist_ok=True)
-    try:
-        with zipfile.ZipFile(source_path, 'r') as zip_ref:
-            zip_ref.extractall(target_dir)
-        
-        if remove_source and os.path.exists(source_path):
-            os.remove(source_path) # 阅后即焚
-            
-    except Exception as e:
-        print(f"💥 爆破解压失败: {e}")
-        # 如果解压到一半报错，为了防止产生脏数据，把生成的残缺文件夹直接抹除
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir)
-        raise Exception(f"魔法书结构损坏: {str(e)}")
 
-async def extract_epub_to_folder(source_path: str, book_id: str, remove_source: bool = True) -> str:
-    """
-    异步包装器：防止树莓派 CPU 解压时阻塞其他用户的网络请求
-    返回解压后的最终文件夹路径
-    """
-    target_dir = f"/app/data/books/{book_id}"
-    
-    # 将同步的解压 I/O 任务推入后台线程池执行
-    await asyncio.to_thread(_sync_extract_epub, source_path, target_dir, remove_source)
-    
-    return target_dir
 async def convert_to_epub_task(source_file_path: str, book_id: str):
     """
-    后台炼金炉：指挥 Calibre 容器将 TXT/MOBI/AZW3 转为 EPUB，随后自动爆破。
+    原生炼金炉：直接在后端本地调用 ebook-convert！稳如老狗！
     """
-    print(f"🔥 正在召唤 Calibre 炼金炉处理: {source_file_path}")
+    from database import DB_PATH
+    print(f"🔥 本地炼金炉启动，目标文件: {source_file_path}")
     
-    # 转换后生成的临时 EPUB 路径
     calibre_output_epub = f"/app/data/raw_books/converted_{book_id}.epub"
-    
-    def run_calibre():
-        # 通过宿主机的 docker.sock 连接容器引擎
-        client = docker.from_env()
-        try:
-            # 找到我们在 docker-compose 里命名的 calibre 容器
-            calibre_container = client.containers.get('library_calibre')
-            
-            # 组装转换命令：ebook-convert <输入路径> <输出路径>
-            cmd = ["ebook-convert", source_file_path, calibre_output_epub]
-            
-            # 在 Calibre 容器内部执行转换
-            exit_code, output = calibre_container.exec_run(cmd)
-            
-            if exit_code != 0:
-                raise Exception(f"Calibre 转换失败: {output.decode('utf-8', errors='ignore')}")
-            return True
-        except Exception as e:
-            raise Exception(f"跨容器调用失败: {str(e)}")
+
+    # 🌟 直接调用本地系统环境中的命令，没有任何网络和跨容器的烦恼
+    cmd = ["ebook-convert", source_file_path, calibre_output_epub]
 
     try:
-        # 1. 执行耗时的转换操作（放入线程池，不阻塞其他用户）
-        await asyncio.to_thread(run_calibre)
-        
-        # 2. 转换成功后，立即调用“爆破术”将其变为静态文件夹 [cite: 5]
-        # remove_source=True 会在解压后删除转换出的那个临时 .epub 文件
+        # 1. 异步执行转换指令
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            error_msg = stderr.decode('utf-8', errors='ignore').strip()
+            raise Exception(f"本地转换引擎报错: {error_msg}")
+
+        print(f"✅ 转换成功，生成临时文件: {calibre_output_epub}")
+
+        # 2. 调用爆破术（解压 EPUB）
         final_dir = await extract_epub_to_folder(calibre_output_epub, book_id, remove_source=True)
         
-        # 3. 炼金完成，更新记忆水晶（数据库）中的路径和格式 [cite: 5]
-        from database import DB_PATH
+        # 3. 更新记忆水晶
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "UPDATE books SET format = 'epub', file_path = ? WHERE id = ?",
@@ -135,15 +99,14 @@ async def convert_to_epub_task(source_file_path: str, book_id: str):
             )
             await db.commit()
             
-        # 4. 扫尾工作：删除最原始的上传文件（如 .txt 或 .mobi）以节省空间 [cite: 5]
+        # 4. 清理原始非 EPUB 文件
         if os.path.exists(source_file_path):
             os.remove(source_file_path)
             
-        print(f"✨ 炼金成功！书籍 {book_id} 已解压完毕，可供秒开。")
+        print(f"✨ 炼金圆满完成！书籍 {book_id} 已入库。")
 
     except Exception as e:
-        print(f"💥 炼金炉故障: {e}")
-        # 如果彻底失败，建议从数据库中抹除该书，防止书架出现永远无法打开的“死书” [cite: 5]
+        print(f"💥 炼金炉炸膛: {e}")
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("DELETE FROM user_books WHERE book_id = ?", (book_id,))
             await db.execute("DELETE FROM books WHERE id = ?", (book_id,))

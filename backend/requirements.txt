@@ -5,3 +5,4 @@ python-multipart==0.0.6
 # 👇 这里的 [socks] 就是让 httpx 支持代理的魔法核心！
 httpx[socks]==0.25.1
 docker==7.0.0
+urllib3<2.0.0
