@@ -210,36 +210,37 @@ const closeReader = () => {
   currentReadingBook.value = null;
 };
 </script>
+
 <style>
 /* ========== 自定义滚动条样式 ========== */
-/* Firefox 浏览器的基础支持 (Firefox 不支持悬停变粗的纯 CSS 魔法，所以保持细的) */
+
+/* 1. 针对 Firefox 浏览器的简单支持 */
 * {
   scrollbar-width: thin;
   scrollbar-color: #333333 transparent;
 }
 
-/* 1. 把轨道的真实宽度稍微设宽一点，给悬停变粗留出“物理空间” */
+/* 2. 针对 Webkit 内核 (Chrome, Edge, Safari) */
+/* 整个滚动条的宽度 */
 ::-webkit-scrollbar {
-  width: 14px; /* 基础物理宽度 */
+  width: 8px; /* 比默认的细一点，显得更精致 */
 }
 
+/* 滚动条的轨道（滑块背后的那条沟） */
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: transparent; /* 设为透明，完美融入你的深色背景 */
 }
 
-/* 2. 平时的状态：用较厚的透明边框把滑块“挤瘦” */
+/* 滚动条的滑块本体 */
 ::-webkit-scrollbar-thumb {
-  background-color: #333333;
-  border-radius: 9999px;
-  /* 上下左右加 4px 透明边框。实际可见宽度 = 14px - 4px - 4px = 6px (显得很细) */
-  border: 4px solid transparent; 
-  background-clip: padding-box;
+  background-color: #333333; /* 平时是低调的深灰色 */
+  border-radius: 9999px; /* 极端的圆角，让它两头是圆的 */
+  border: 2px solid transparent; /* 加个透明边框... */
+  background-clip: padding-box; /* ...配合这句，可以让滑块不紧贴屏幕边缘 */
 }
 
-/* 3. 鼠标悬停的状态：颜色变亮，透明边框变薄，滑块“长胖” */
+/* 鼠标悬停在滑块上时的效果 */
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #5a5a5a;
-  /* 悬停时边框收缩到 2px。实际可见宽度 = 14px - 2px - 2px = 10px (视觉变粗) */
-  border: 2px solid transparent; 
+  background-color: #404040; /* 变亮一点点，提供交互反馈 */
 }
 </style>
