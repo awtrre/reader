@@ -347,7 +347,7 @@ const smartDisplay = async (cfiData) => {
         console.log("🔒 拦截到 ePub.js 初始化的虚假翻页，已屏蔽！");
         return; 
       }
-      let exactCfi = null; 
+      let combinedCfi = null;
       
       try {
         const contents = rendition.getContents()[0];
@@ -388,19 +388,19 @@ const smartDisplay = async (cfiData) => {
         console.error("💥 [雷达程序崩溃]:", e);
       }
       
-      if (!exactCfi) {
+      if (!combinedCfi) {
         console.error("❌ [雷达脱靶]: 依然没抓到，需要继续排查！");
         return; 
       }
       
       let progress = 0;
       if (epubBook.locations && epubBook.locations.length > 0) {
-        progress = epubBook.locations.percentageFromCfi(exactCfi);
+        progress = epubBook.locations.percentageFromCfi(combinedCfi.split('|__|')[0]);
         currentPage.value = Math.round(progress * totalPages.value) || 1;
         inputPage.value = currentPage.value;
       }
       
-      saveProgressToBackend(exactCfi, progress);
+      saveProgressToBackend(combinedCfi, progress);
     });
 
     rendition.on('selected', handleSelection);
