@@ -178,7 +178,7 @@ const applyTheme = () => {
   });
 };
 // ==========================================
-// 1. 生命周期与初始化
+// 1. 生命周期与初始化 (重构极简版)
 // ==========================================
 onMounted(() => {
   initReader();
@@ -194,7 +194,7 @@ const initReader = async () => {
   try {
     epubBook = ePub(`/api/static/books/${props.book.id}/`);
 
-    // --- 1. 离线/在线进度拉取逻辑 (保持原样，无需改动) ---
+    // --- 1. 离线/在线进度拉取逻辑 (保持稳定) ---
     let savedCfi = null;
     let isReadyToSave = false;
     const progressCacheKey = `offline_progress_${props.book.id}`;
@@ -248,192 +248,99 @@ const initReader = async () => {
       allowScriptedContent: true
     });
 
-      // ⚡️ 渲染拦截：直接瞄准底层元素，精准贴上统一雷达标签
-      rendition.hooks.content.register((contents) => {
-        const doc = contents.document;
-
-        // 1. 纯图片书的救星
-        const images = doc.querySelectorAll('img, svg, image');
-        images.forEach((img, index) => {
-          img.classList.add('sync-anchor');
-          if (!img.id) img.id = `epub-img-${index}`;
-        });
-
-        // 2. 文本段落的【安全】切碎逻辑
-        const blocks = doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6');
-        
-        blocks.forEach((el, blockIndex) => {
-          if (el.querySelector('img, svg, image')) return;
-
-          let sentenceIndex = 0;
-
-          // 🧙‍♂️ 深度遍历 DOM 树，只碰纯文本，避开 HTML 标签
-          const walkAndWrapTextNodes = (node) => {
-            const children = Array.from(node.childNodes);
-            
-            children.forEach(child => {
-              // 【情况 A】纯文本节点 (真正该切碎的东西)
-              if (child.nodeType === 3) {
-                const text = child.nodeValue;
-                if (!text.trim()) return;
-
-                // 🎯 这里用你的正则绝对安全
-                const sentences = text.match(/[^。！？!?\.\…]+[。！？!?\.\…]+[”’"'\)\]）】》]*|.+/g);
-                
-                if (sentences) {
-                  const fragment = doc.createDocumentFragment();
-                  sentences.forEach(s => {
-                    if (!s.trim()) return;
-                    const span = doc.createElement('span');
-                    span.className = 'sync-anchor'; // 贴上雷达标签
-                    span.id = `sentence-${blockIndex}-${sentenceIndex++}`;
-                    span.textContent = s; // 用 textContent 代替 innerHTML，原样输出
-                    fragment.appendChild(span);
-                  });
-                  // 🐷 重点修复：之前这里写成了 node.parentNode.replaceChild 导致崩溃
-                  // 正确做法：直接用当前的 node 替换它的子节点
-                  node.replaceChild(fragment, child); 
-                }
-              } 
-              // 【情况 B】元素节点 (如 <a> <span> <i>)
-              else if (child.nodeType === 1) {
-                if (!['RUBY', 'RT', 'RP', 'PRE', 'CODE'].includes(child.tagName)) {
-                  // 继续钻进去找文本
-                  walkAndWrapTextNodes(child);
-                } else {
-                  // 特殊排版标签，直接整体当作一个雷达点
-                  child.classList.add('sync-anchor');
-                  child.id = `sentence-${blockIndex}-${sentenceIndex++}`;
-                }
-              }
-            });
-          };
-
-          walkAndWrapTextNodes(el);
-        });
-      });
+    // 🎨 应用极简黑白灰主题 (无需再写 hooks 拦截器)
     applyTheme();
 
-// 🚀 核心破解：智能加载与二段跳兜底
-const smartDisplay = async (cfiData) => {
-  if (!cfiData) {
-    await rendition.display();
-    return;
-  }
-
-  if (cfiData.includes('|__|')) {
-    const [nativeCfi, exactData] = cfiData.split('|__|');
-
-    // 🛡️ 兼容老数据：如果数据库里存的还是 epubcfi(...)，提取出方括号里的 ID
-    let targetId = exactData;
-    if (exactData.startsWith('epubcfi')) {
-      const match = exactData.match(/\[(.*?)\]/);
-      if (match) targetId = match[1];
+    // --- 3. 🚀 极速渲染与一键空降 ---
+    // 解析保存的坐标。格式为: "epubcfi(...)|__|unit-123" 或纯 "epubcfi(...)"
+    let targetLocation = savedCfi;
+    if (savedCfi && savedCfi.includes('|__|')) {
+      targetLocation = savedCfi.split('|__|')[0]; // 直接取前面绝对精准的标准 CFI
     }
 
-    console.log("🪂 启动自适应二段跳... 1. 载入原生章节");
-    await rendition.display(nativeCfi); 
+    // 因为后端固化了DOM，现在的 CFI 是完全精准的，直接 display 即可
+    console.log("🪂 启动一键空降...");
+    await rendition.display(targetLocation || undefined);
 
-    console.log(`🎯 DOM已重构，正在寻找精准 ID: ${targetId}`);
-    try {
-      // 🚀 核心魔法：直接在当前加载好的 iframe 里找 ID
-      const contents = rendition.getContents()[0];
-      const targetEl = contents.document.getElementById(targetId);
+    // 揭开幕布
+    if (viewer.value) viewer.value.classList.add('animate-fade-in');
+    
+    // 初始化页码展示
+    generatePagination(); 
+    
+    setTimeout(() => {
+      isReadyToSave = true;
+      console.log("🚀 初始渲染彻底完成，极简进度雷达已启动！");
+    }, 500);
 
-      if (targetEl) {
-        // 让当前设备根据自己的 DOM 结构，现场生成绝对匹配的 CFI！
-        const spineItem = epubBook.spine.get(rendition.currentLocation().start.index);
-        const freshCfi = new ePub.CFI(targetEl, spineItem.cfiBase).toString();
-        await rendition.display(freshCfi);
-        console.log("✅ 现场生成 CFI 并精准定位成功！");
-      } else {
-        console.warn("⚠️ 没找到精确 ID，停在原生段落起点");
-      }
-    } catch (e) {
-      console.warn("⚠️ 第二跳发生异常", e);
-    }
-
-  } else {
-    try { await rendition.display(cfiData); } 
-    catch (e) { await rendition.display(); }
-  }
-};
-
-    smartDisplay(savedCfi).then(() => {
-      // 揭开幕布
-      if (viewer.value) viewer.value.classList.add('animate-fade-in');
-      
-      generatePagination(savedCfi?.split('|__|')[0] || savedCfi);
-      
-      setTimeout(() => {
-        isReadyToSave = true;
-        console.log("🚀 初始渲染彻底完成，进度雷达已启动！");
-      }, 500);
-    });
-
-// ⚡️ 进度监听：突破 Iframe 视界限制的绝对坐标雷达
+    // --- 4. ⚡️ 极简进度雷达：监听翻页，寻找 unit-X ---
     rendition.on('relocated', (location) => {
       if (!location) return;
-      if (!isReadyToSave) {
-        console.log("🔒 拦截到 ePub.js 初始化的虚假翻页，已屏蔽！");
-        return; 
-      }
-      let combinedCfi = null;
-      
+      if (!isReadyToSave) return; // 防治初始化虚假翻页
+
       try {
         const contents = rendition.getContents()[0];
         const iframeDoc = contents.document;
         
-        // 🚨 核心破解魔法：获取大 Iframe 自身在当前屏幕上的真实偏移量！
+        // 核心突破：获取 Iframe 的屏幕绝对偏移量
         const iframe = iframeDoc.defaultView.frameElement;
         const iframeOffset = iframe.getBoundingClientRect().left; 
-        
         const viewWidth = window.innerWidth;
-        const targets = Array.from(iframeDoc.querySelectorAll('.sync-anchor'));
         
+        // 直接寻找后端注入的雷达信标
+        const targets = Array.from(iframeDoc.querySelectorAll('.sync-anchor'));
+        let foundElement = null;
+
         for (let el of targets) {
           const rect = el.getBoundingClientRect();
-          
-          // 🚨 坐标系统合：元素内部位置 + Iframe的偏移位置 = 真实的屏幕视觉位置
           const absoluteLeft = rect.left + iframeOffset;
           
-          // 给 absoluteLeft 一个 -10 的容错率，防止首字母斜体或标点挤压出界
+          // 容错率 -10，寻找当前屏幕左侧第一个出现的信标
           if (absoluteLeft >= -10 && absoluteLeft < viewWidth) {
-            const spineItem = epubBook.spine.get(location.start.index);
-        
-        // 🚀 1. 直接获取精准元素的 ID (极其稳定)
-            const preciseId = el.id;
-        
-        // 🚀 2. 获取原生的块级 CFI (用来加载章节)
-            const parentNode = el.closest('p, h1, h2, h3, h4, h5, h6') || el.parentElement || el;
-            const nativeCfi = new ePub.CFI(parentNode, spineItem.cfiBase).toString();
-        
-        // 🚀 3. 缝合：原生CFI + ID
-            combinedCfi = `${nativeCfi}|__|${preciseId}`;
-        
-            console.log("🎯 [跨端雷达锁定 ID]:", preciseId);
+            foundElement = el;
             break; 
           }
+        }
+
+        if (foundElement) {
+          const preciseId = foundElement.id; // 例如: unit-145
+          const spineItem = epubBook.spine.get(location.start.index);
+          
+          // 🎯 1. 生成稳定的原生 CFI (用于下次一键空降)
+          const preciseCfi = new ePub.CFI(foundElement, spineItem.cfiBase).toString();
+          
+          // 🎯 2. 计算绝对百分比进度
+          const unitMatch = preciseId.match(/unit-(\d+)/);
+          const total = props.book.total_units || 1; 
+          let progress = 0;
+
+          if (unitMatch) {
+            const currentUnit = parseInt(unitMatch[1]);
+            progress = currentUnit / total;
+            
+            // 更新 UI 的全局数字展示
+            currentPage.value = currentUnit;
+            totalPages.value = total;
+            inputPage.value = currentUnit;
+          } else {
+            // 极端情况兜底
+            progress = location.start.percentage || 0;
+          }
+
+          // 🎯 3. 缝合保存：CFI 用于跳转，ID 方便后续 TTS 调用
+          const combinedCfi = `${preciseCfi}|__|${preciseId}`;
+          console.log(`🎯 [雷达锁定] 单元: ${preciseId}, 进度: ${(progress*100).toFixed(2)}%`);
+          
+          saveProgressToBackend(combinedCfi, progress);
+        } else {
+          console.warn("⚠️ 视野内未发现预处理信标");
         }
       } catch (e) {
         console.error("💥 [雷达程序崩溃]:", e);
       }
-      
-      if (!combinedCfi) {
-        console.error("❌ [雷达脱靶]: 依然没抓到，需要继续排查！");
-        return; 
-      }
-      
-      let progress = 0;
-      if (epubBook.locations && epubBook.locations.length > 0) {
-        progress = epubBook.locations.percentageFromCfi(combinedCfi.split('|__|')[0]);
-        currentPage.value = Math.round(progress * totalPages.value) || 1;
-        inputPage.value = currentPage.value;
-      }
-      
-      saveProgressToBackend(combinedCfi, progress);
     });
 
+    // 绑定交互事件
     rendition.on('selected', handleSelection);
     setupIframeClick();
 
@@ -520,12 +427,12 @@ const summonReference = async (query) => {
 };
 
 // ==========================================
-// 4. 分页与排版
+// 4. 分页与排版 (秒开极简版)
 // ==========================================
 let saveTimer = null;
 
 const saveProgressToBackend = (cfi, progress) => {
-  // 无论如何，先把最新进度刻印在本地
+  // 无论如何，先把最新进度刻印在本地 (这里的 cfi 已经是缝合好的 "epubcfi(...)|__|unit-X")
   localStorage.setItem(`offline_progress_${props.book.id}`, cfi);
   
   clearTimeout(saveTimer);
@@ -537,7 +444,8 @@ const saveProgressToBackend = (cfi, progress) => {
         'user-token': localStorage.getItem('geek_token') || '',
         'guest-uuid': localStorage.getItem('guest_uuid') || ''
       },
-      body: JSON.stringify({ cfi: cfi, percentage: progress })
+      // 🐛 细节修复：后端 main.py 接收的是 "percent"，这里统一对齐
+      body: JSON.stringify({ cfi: cfi, percent: progress }) 
     })
     .then(res => {
       if (res.ok) {
@@ -546,40 +454,48 @@ const saveProgressToBackend = (cfi, progress) => {
       }
     })
     .catch(() => {
-      // 📴 断网了！不仅要吞掉报错，还要给这本书打上"待同步"的烙印！
+      // 📴 断网打上标记
       localStorage.setItem(`sync_pending_${props.book.id}`, 'true');
       console.log("📴 离线保存成功，已打上待同步标记！");
     });
   }, 2000);
 };
 
-const generatePagination = async (savedCfi) => {
+// ⚡️ 初始化页码：直接白嫖后端的绝对真理数据，耗时 0 毫秒！
+const generatePagination = () => {
   if (!epubBook) return;
 
-  try {
-    await epubBook.locations.generate(600);
-    totalPages.value = epubBook.locations.total;
+  const total = props.book.total_units;
+  totalPages.value = total || '???';
 
-    const currentCfi = savedCfi || (rendition.currentLocation()?.start?.cfi);
-    if (currentCfi) {
-      const progress = epubBook.locations.percentageFromCfi(currentCfi);
-      currentPage.value = Math.round(progress * totalPages.value) || 1;
-      inputPage.value = currentPage.value;
-    }
-  } catch (e) {
-    // 允许在离线未缓存完全时，页码计算失败
-    console.warn("⚠️ 离线状态下无法遍历书籍生成全局页码，但不影响继续阅读！");
+  // 初始渲染完成前，先用历史进度恢复底部栏的“当前页(单元)”数字
+  if (total && props.book.progress) {
+    currentPage.value = Math.max(1, Math.round(props.book.progress * total));
+    inputPage.value = currentPage.value;
   }
 };
 
+// 🚀 极客空降法：按比例估算目标单元所在的章节
 const jumpToTargetPage = () => {
-  const target = parseInt(inputPage.value);
-  if (isNaN(target) || target < 1 || target > totalPages.value) {
-    inputPage.value = currentPage.value;
+  const targetUnit = parseInt(inputPage.value);
+  const total = parseInt(totalPages.value);
+
+  if (isNaN(targetUnit) || targetUnit < 1 || targetUnit > total) {
+    inputPage.value = currentPage.value; // 非法输入弹回原位
     return;
   }
-  const cfi = epubBook.locations.cfiFromPercentage(target / totalPages.value);
-  rendition.display(cfi);
+  
+  // 我们无法直接用 ePub.js 跳转到某个自定义 ID，因为那需要先加载对应章节。
+  // 完美解法：算出百分比 -> 算出目标章节 -> 空降到章节头部。
+  const targetPercentage = targetUnit / total;
+  const targetSpineIndex = Math.floor(targetPercentage * epubBook.spine.length);
+  
+  console.log(`🪂 正在跨越空间，空降至第 ${targetSpineIndex} 章节...`);
+  
+  // 飞跃到对应章节。用户落地后，雷达会自动扫描当前屏幕上的 unit-X 并更新页码。
+  rendition.display(targetSpineIndex).then(() => {
+    showBars.value = false; // 跳转后自动收起菜单栏，保持沉浸
+  });
 };
 
 const cycleFontSize = () => {
