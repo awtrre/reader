@@ -251,18 +251,49 @@ const initReader = async () => {
     // 🎨 应用极简黑白灰主题 (无需再写 hooks 拦截器)
     applyTheme();
 
-    // --- 3. 🚀 极速渲染与一键空降 ---
-    // 解析保存的坐标。格式为: "epubcfi(...)|__|unit-123" 或纯 "epubcfi(...)"
+// --- 3. 🚀 极速渲染与一键空降 (带安全降级) ---
     let targetLocation = savedCfi;
-    if (savedCfi && savedCfi.includes('|__|')) {
-      targetLocation = savedCfi.split('|__|')[0]; // 直接取前面绝对精准的标准 CFI
+    
+    // 解析坐标
+    if (savedCfi) {
+      if (savedCfi.includes('|__|')) {
+        const parts = savedCfi.split('|__|');
+        
+        if (parts[0].startsWith('epubcfi')) {
+          // 兼容之前的缝合格式：epubcfi(...)|__|unit-X
+          targetLocation = parts[0]; 
+        } else {
+          // 🚀 全新的绝对同步格式：章节索引|__|unit-X
+          const spineIndex = parseInt(parts[0], 10);
+          const unitId = parts[1];
+          const spineItem = epubBook.spine.get(spineIndex);
+          if (spineItem) {
+            targetLocation = `${spineItem.href}#${unitId}`;
+          }
+        }
+      } else if (savedCfi.startsWith('epubcfi')) {
+        // 最老的纯 CFI 格式
+        targetLocation = savedCfi;
+      }
     }
 
-    // 因为后端固化了DOM，现在的 CFI 是完全精准的，直接 display 即可
-    console.log("🪂 启动一键空降...");
-    await rendition.display(targetLocation || undefined);
+    console.log("🪂 尝试空降至:", targetLocation || "起点");
 
-    // 揭开幕布
+    try {
+      // 尝试渲染目标位置
+      await rendition.display(targetLocation || undefined);
+    } catch (error) {
+      console.warn("⚠️ 历史坐标已失效或在当前设备不兼容，触发安全降级，返回首页...", error);
+      
+      // 关键修复：清除本地和后端的脏数据，防止下次进来继续报错黑屏
+      localStorage.removeItem(`offline_progress_${props.book.id}`);
+      saveProgressToBackend('', 0); // 告诉后端进度归零
+      
+      // 不带参数调用 display，Epub.js 会自动从头开始渲染
+      await rendition.display(); 
+    }
+
+    // 无论从哪里落地，揭开幕布显示内容
     if (viewer.value) viewer.value.classList.add('animate-fade-in');
     
     // 初始化页码展示
@@ -270,7 +301,7 @@ const initReader = async () => {
     
     setTimeout(() => {
       isReadyToSave = true;
-      console.log("🚀 初始渲染彻底完成，极简进度雷达已启动！");
+      console.log("🚀 渲染彻底完成，极简进度雷达已启动！");
     }, 500);
 
     // --- 4. ⚡️ 极简进度雷达：监听翻页，寻找 unit-X ---
@@ -304,12 +335,11 @@ const initReader = async () => {
 
         if (foundElement) {
           const preciseId = foundElement.id; // 例如: unit-145
-          const spineItem = epubBook.spine.get(location.start.index);
           
-          // 🎯 1. 生成稳定的原生 CFI (用于下次一键空降)
-          const preciseCfi = new ePub.CFI(foundElement, spineItem.cfiBase).toString();
+          // 🎯 1. 抛弃脆弱的原生 CFI，获取绝对稳定的章节索引
+          const spineIndex = location.start.index;
           
-          // 🎯 2. 计算绝对百分比进度
+          // 🎯 2. 计算绝对百分比进度 (你的原逻辑保持不变)
           const unitMatch = preciseId.match(/unit-(\d+)/);
           const total = props.book.total_units || 1; 
           let progress = 0;
@@ -318,18 +348,16 @@ const initReader = async () => {
             const currentUnit = parseInt(unitMatch[1]);
             progress = currentUnit / total;
             
-            // 更新 UI 的全局数字展示
             currentPage.value = currentUnit;
             totalPages.value = total;
             inputPage.value = currentUnit;
           } else {
-            // 极端情况兜底
             progress = location.start.percentage || 0;
           }
 
-          // 🎯 3. 缝合保存：CFI 用于跳转，ID 方便后续 TTS 调用
-          const combinedCfi = `${preciseCfi}|__|${preciseId}`;
-          console.log(`🎯 [雷达锁定] 单元: ${preciseId}, 进度: ${(progress*100).toFixed(2)}%`);
+          // 🎯 3. 缝合保存：使用 "章节索引号|__|绝对ID"
+          const combinedCfi = `${spineIndex}|__|${preciseId}`;
+          console.log(`🎯 [雷达锁定] 章节: ${spineIndex}, 单元: ${preciseId}, 进度: ${(progress*100).toFixed(2)}%`);
           
           saveProgressToBackend(combinedCfi, progress);
         } else {
