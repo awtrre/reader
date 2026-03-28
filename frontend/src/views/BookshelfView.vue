@@ -27,8 +27,14 @@
           </div>
         </div>
 
-        <div class="absolute bottom-0 left-0 right-0 w-full bg-[#333]/80 h-[2px] z-20">
-          <div class="bg-neutral-300 h-full transition-all duration-500" :style="{ width: book.progress + '%' }"></div>
+        <div 
+          v-if="book.progress && book.progress > 0" 
+          class="absolute bottom-0 left-0 right-0 w-full bg-[#111] h-[3px] z-20"
+        >
+          <div 
+            class="bg-neutral-600 h-full transition-all duration-500 ease-out" 
+            :style="{ width: `${(book.progress * 100).toFixed(1)}%` }"
+          ></div>
         </div>
       </div>
 
