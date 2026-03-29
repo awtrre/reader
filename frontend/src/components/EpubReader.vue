@@ -232,6 +232,9 @@ const initReader = async () => {
           const data = await res.json();
           savedCfi = data.cfi;
           if (savedCfi) localStorage.setItem(progressCacheKey, savedCfi);
+          if (data.font_size) {           // ✨ 新增：读取并设置专属字号
+            currentFontSize.value = data.font_size;
+          }
         }
       } catch (error) {
         savedCfi = localStorage.getItem(progressCacheKey);
@@ -261,6 +264,7 @@ const initReader = async () => {
 
     // 🎨 应用极简黑白灰主题 (无需再写 hooks 拦截器)
     applyTheme();
+    rendition.themes.fontSize(`${currentFontSize.value}%`);  // ✨ 确保在 display 渲染前，先设置好拿到的字号
 
 // --- 3. 🚀 极速渲染与一键空降 (极简重构版) ---
 let targetLocation = savedCfi;
@@ -529,12 +533,29 @@ const jumpToTargetPage = () => {
   }
 };
 
-const cycleFontSize = () => {
+const cycleFontSize = async () => {
   const sizes = [80, 100, 120, 140];
   const currentIndex = sizes.indexOf(currentFontSize.value);
   currentFontSize.value = sizes[(currentIndex + 1) % sizes.length];
-  rendition.themes.fontSize(`${currentFontSize.value}%`);
-  fetch('/api/user/prefs', {
+  if (viewer.value) {  // 1. ✨ 开启蒙版隐身效果，并锁住雷达探测
+    viewer.value.style.transition = 'opacity 0.2s';
+    viewer.value.style.opacity = '0';
+  }
+  isJumpLocked = true; 
+  rendition.themes.fontSize(`${currentFontSize.value}%`);   // 2. ✨ 更改 Epub 内部字号
+  const targetUnit = currentPage.value;  // 3. ✨ 精确打击：利用你的 map 机制，找到当前所在的位置并强制空降
+  if (unitMap.length > 0 && targetUnit !== '-') {
+    const mapItem = unitMap.find(m => targetUnit >= m.start && targetUnit <= m.end);
+    if (mapItem) {
+      const preciseId = `unit-${targetUnit}`;
+      await rendition.display(`${mapItem.href}#${preciseId}`);
+    }
+  }
+  setTimeout(() => {   // 4. ✨ 等待渲染稳固后，解除蒙版，解锁雷达
+    if (viewer.value) viewer.value.style.opacity = '1';
+    isJumpLocked = false;
+  }, 300);
+  fetch(`/api/books/${props.book.id}/prefs`, {  // 5. ✨ 将最新字号保存给后端（路径改为这本特定的书）
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',

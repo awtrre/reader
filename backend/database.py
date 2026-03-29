@@ -47,13 +47,17 @@ async def init_db():
                 progress_percentage REAL DEFAULT 0.0, -- 阅读进度百分比 (用于书架底部的小进度条)
                 current_cfi TEXT,                     -- 🌟 极其重要！记住你读到了哪个字的坐标！
                 tts_cfi TEXT,                         -- 🗣️ 赛博伴读专属记忆！上次朗读停在的坐标
+                font_size INTEGER DEFAULT 100,
                 last_read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, book_id),
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
             )
         """)
-
+        try:
+            await db.execute("ALTER TABLE user_books ADD COLUMN font_size INTEGER DEFAULT 100")
+        except Exception:
+            pass
         # 4. ✍️ 岁月痕迹表 (你的划线、批注全在这里)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS annotations (

@@ -300,11 +300,11 @@ async def get_progress(book_id: str, user_token: Optional[str] = Header(None), g
         # 原本的查询逻辑保持不变
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT current_cfi FROM user_books WHERE user_id = ? AND book_id = ?",
+            "SELECT current_cfi, font_size FROM user_books WHERE user_id = ? AND book_id = ?",
             (user_id, book_id)
         )
         res = await cursor.fetchone()
-        return {"cfi": res["current_cfi"] if res else None}
+        return {"cfi": res["current_cfi"] if res else None, "font_size": res["font_size"] if res else 100}
 
 @app.post("/api/books/{book_id}/progress")
 async def save_progress(book_id: str, payload: dict, user_token: Optional[str] = Header(None), guest_uuid: Optional[str] = Header(None)):
@@ -326,6 +326,20 @@ async def save_progress(book_id: str, payload: dict, user_token: Optional[str] =
     # ✨ 完美衔接：直接调用 database.py 里写好的护城河逻辑！
     await update_reading_progress(user_id, book_id, cfi, percent)
     
+    return {"status": "success"}
+
+@app.post("/api/books/{book_id}/prefs")
+async def save_book_prefs(book_id: str, payload: dict, user_token: Optional[str] = Header(None), guest_uuid: Optional[str] = Header(None)):
+    from database import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        user_id = await get_current_user_id(db, user_token, guest_uuid)
+        font_size = payload.get("font_size", 100)
+        # 直接更新这本书的字号
+        await db.execute(
+            "UPDATE user_books SET font_size = ? WHERE user_id = ? AND book_id = ?",
+            (font_size, user_id, book_id)
+        )
+        await db.commit()
     return {"status": "success"}
 # -----------------------------------------------------------------
 # 📚 书架与图书管理模块
