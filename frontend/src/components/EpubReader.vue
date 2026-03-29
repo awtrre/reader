@@ -264,7 +264,7 @@ const initReader = async () => {
 
 // --- 3. 🚀 极速渲染与一键空降 (极简重构版) ---
 let targetLocation = savedCfi;
-let initialPageNumber = '-';
+let initialPageNumber = 0;
 
 // 🎯 核心逻辑：仅识别 unit-X 格式。不再计算百分比，不再兼容旧分隔符
 if (savedCfi && savedCfi.startsWith('unit-') && unitMap.length > 0) {
@@ -419,7 +419,21 @@ const openTocOverlay = () => {
   showBars.value = false;
   showTocOverlay.value = true;
   epubBook.loaded.navigation.then(nav => {
-    tocList.value = nav.toc;
+    // 定义一个递归辅助函数来展平目录
+    const flattenToc = (items, level = 0) => {
+      return items.reduce((acc, item) => {
+        const indent = level > 0 ? '　'.repeat(level) : '';
+        acc.push({
+          ...item,
+          label: indent + item.label // 修改显示文案
+        });
+        if (item.subitems && item.subitems.length > 0) {
+          acc.push(...flattenToc(item.subitems, level + 1));
+        }
+        return acc;
+      }, []);
+    };
+    tocList.value = flattenToc(nav.toc);
   });
 };
 
