@@ -289,9 +289,18 @@ async def get_progress(book_id: str, user_token: Optional[str] = Header(None), g
     from database import DB_PATH
     async with aiosqlite.connect(DB_PATH) as db:
         user_id = await get_current_user_id(db, user_token, guest_uuid)
+        
+        # ✨ 逻辑重构：认定“获取进度 = 刚才打开了这本书”，立刻刷新最后阅读时间！
+        await db.execute(
+            "UPDATE user_books SET last_read_at = CURRENT_TIMESTAMP WHERE user_id = ? AND book_id = ?",
+            (user_id, book_id)
+        )
+        await db.commit()
+
+        # 原本的查询逻辑保持不变
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT current_cfi FROM user_books WHERE user_id = ? AND book_id = ?", 
+            "SELECT current_cfi FROM user_books WHERE user_id = ? AND book_id = ?",
             (user_id, book_id)
         )
         res = await cursor.fetchone()
@@ -299,28 +308,24 @@ async def get_progress(book_id: str, user_token: Optional[str] = Header(None), g
 
 @app.post("/api/books/{book_id}/progress")
 async def save_progress(book_id: str, payload: dict, user_token: Optional[str] = Header(None), guest_uuid: Optional[str] = Header(None)):
-    from database import DB_PATH
+    from database import DB_PATH, update_reading_progress  # ✨ 衔接点：把完美的工具函数导进来
+    
     async with aiosqlite.connect(DB_PATH) as db:
         user_id = await get_current_user_id(db, user_token, guest_uuid)
         cursor = await db.execute(
-            "SELECT 1 FROM user_books WHERE user_id = ? AND book_id = ?", 
+            "SELECT 1 FROM user_books WHERE user_id = ? AND book_id = ?",
             (user_id, book_id)
         )
         is_owner = await cursor.fetchone()
         if not is_owner:
             raise HTTPException(status_code=403, detail="账号状态已变更，拒绝越权保存进度！")
 
-        cfi = payload.get("cfi")
-        percent = payload.get("percent", 0)
-        await db.execute(
-            """
-            UPDATE user_books 
-            SET current_cfi = ?, progress_percentage = ?
-            WHERE user_id = ? AND book_id = ?
-            """,
-            (cfi, percent, user_id, book_id)
-        )
-        await db.commit()
+    cfi = payload.get("cfi")
+    percent = payload.get("percent", 0)
+
+    # ✨ 完美衔接：直接调用 database.py 里写好的护城河逻辑！
+    await update_reading_progress(user_id, book_id, cfi, percent)
+    
     return {"status": "success"}
 # -----------------------------------------------------------------
 # 📚 书架与图书管理模块
