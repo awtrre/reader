@@ -262,62 +262,46 @@ const initReader = async () => {
     // 🎨 应用极简黑白灰主题 (无需再写 hooks 拦截器)
     applyTheme();
 
-// --- 3. 🚀 极速渲染与一键空降 (带安全降级) ---
-    let targetLocation = savedCfi;
-    
-    // 🌟 修复1：优先用后端的进度数据做一个基础估算，而不是无脑写死 1
-    let initialPageNumber = '-';
-    if (props.book.total_units && props.book.progress) {
-      initialPageNumber = Math.max(1, Math.round(props.book.progress * props.book.total_units));
-    }
+// --- 3. 🚀 极速渲染与一键空降 (极简重构版) ---
+let targetLocation = savedCfi;
+let initialPageNumber = '-';
 
-    // 查找具体路径与精准页码
-    if (savedCfi && savedCfi.startsWith('unit-') && unitMap.length > 0) {
-      const targetUnitId = parseInt(savedCfi.split('-')[1], 10);
-      initialPageNumber = targetUnitId; // 拿到了绝对准确的单元号
-      const mapItem = unitMap.find(m => targetUnitId >= m.start && targetUnitId <= m.end);
-      
-      if (mapItem) {
-        targetLocation = `${mapItem.href}#${savedCfi}`;
-      }
-    } else if (savedCfi && savedCfi.includes('|__|')) {
-      // 兼容过渡版本：格式通常是 "章节号|__|unit-xxx"
-      const parts = savedCfi.split('|__|');
-      targetLocation = parts[0]; 
-      
-      // 🌟 修复2：从旧格式中提取出真正的页码，而不是丢弃它！
-      if (parts[1] && parts[1].startsWith('unit-')) {
-        initialPageNumber = parseInt(parts[1].split('-')[1], 10);
-      }
-    }
+// 🎯 核心逻辑：仅识别 unit-X 格式。不再计算百分比，不再兼容旧分隔符
+if (savedCfi && savedCfi.startsWith('unit-') && unitMap.length > 0) {
+  const targetUnitId = parseInt(savedCfi.split('-')[1], 10);
+  initialPageNumber = targetUnitId; 
+  
+  // 从地图中检索该单元所属的物理文件 (href)
+  const mapItem = unitMap.find(m => targetUnitId >= m.start && targetUnitId <= m.end);
+  if (mapItem) {
+    // 拼接成 Epub.js 识别的锚点格式：chapter1.xhtml#unit-145
+    targetLocation = `${mapItem.href}#${savedCfi}`;
+  }
+}
 
-    // ✨ 灌入 UI：此时无论是新格式、旧格式还是靠后端比例推算，都能拿到正确的数字
-    currentPage.value = initialPageNumber;
-    inputPage.value = initialPageNumber;
-    totalPages.value = props.book.total_units || '-';
+// ✨ 状态灌注：直接同步 UI，不再通过函数中转
+currentPage.value = initialPageNumber;
+inputPage.value = initialPageNumber;
+totalPages.value = props.book.total_units || '-';
 
-    console.log("🪂 查阅地图后，尝试空降至:", targetLocation || "起点");
+console.log("🪂 目标坐标:", targetLocation || "起点");
 
-    try {
-      await rendition.display(targetLocation || undefined);
-    } catch (error) {
-      console.warn("⚠️ 坐标失效，触发安全降级，返回起点...", error);
-      localStorage.removeItem(`offline_progress_${props.book.id}`);
-      saveProgressToBackend('', 0);
-      await rendition.display(); 
-    }
+try {
+  // 执行空降
+  await rendition.display(targetLocation || undefined);
+} catch (error) {
+  console.warn("⚠️ 坐标失效，强制回滚至起点", error);
+  localStorage.removeItem(`offline_progress_${props.book.id}`);
+  await rendition.display(); 
+}
 
-    if (viewer.value) viewer.value.classList.add('animate-fade-in');
-    generatePagination(); 
-    setTimeout(() => { isReadyToSave = true; }, 500);
-    
-    // 初始化页码展示
-    generatePagination(); 
-    
-    setTimeout(() => {
-      isReadyToSave = true;
-      console.log("🚀 渲染彻底完成，极简进度雷达已启动！");
-    }, 500);
+// 动画与雷达激活
+if (viewer.value) viewer.value.classList.add('animate-fade-in');
+
+setTimeout(() => {
+  isReadyToSave = true; // 落地 500ms 后才允许雷达扫描存档，防止初始化跳变
+  console.log("🚀 渲染彻底完成，雷达已锁定精准信标");
+}, 500);
 
     // --- 4. ⚡️ 极简进度雷达：监听翻页，寻找 unit-X ---
     rendition.on('relocated', (location) => {
@@ -505,67 +489,29 @@ const saveProgressToBackend = (cfi, progress) => {
   }, 2000);
 };
 
-// ⚡️ 初始化总页码
-const generatePagination = () => {
-  if (!epubBook) return;
-  totalPages.value = props.book.total_units || '-';
-  // ✨ 移除了基于进度浮点数的模糊计算，完全信任 initReader 里的精确 unit 提取
-};
-
-// 🚀 极客空降法：依靠藏宝图实现像素级精确打击
+// 🚀 极客空降法 (精简版)
 const jumpToTargetPage = () => {
   const targetUnit = parseInt(inputPage.value);
   const total = parseInt(totalPages.value);
 
   if (isNaN(targetUnit) || targetUnit < 0 || targetUnit > total) {
-    inputPage.value = currentPage.value; // 非法输入弹回原位
+    inputPage.value = currentPage.value;
     return;
   }
   
   if (unitMap.length > 0) {
-    // 🗺️ 有地图：直接查出这个句子在哪个文件，拼装出 href#unit-X
     const mapItem = unitMap.find(m => targetUnit >= m.start && targetUnit <= m.end);
-    
     if (mapItem) {
-      console.log(`🪂 查阅藏宝图：目标单元 ${targetUnit} 位于 ${mapItem.href}`);
-      
-      // 🌟 核心修改：起跳前抢先存档！
-      const targetSpineItem = epubBook.spine.get(mapItem.href);
-      if (targetSpineItem) {
-        const spineIndex = targetSpineItem.index;
-        const preciseId = `unit-${targetUnit}`;
-        const combinedCfi = `${spineIndex}|__|${preciseId}`;
-        const progress = targetUnit / total;
-        
-        console.log(`💾 抢先存档: 章节 ${spineIndex}, 单元 ${preciseId}`);
-        saveProgressToBackend(combinedCfi, progress);
-        
-        // 顺手把 UI 状态改了，防止跳转途中底部页码闪烁
-        currentPage.value = targetUnit;
-      }
-
-      // 直接触发原生底层跳转
-      rendition.display(`${mapItem.href}#unit-${targetUnit}`).then(() => {
-        showBars.value = false; // 跳转后自动收起菜单栏
-        
-        // 🛡️ 落地后举起 500ms 盾：彻底无视落地引发的任何 relocated 余震
+      const preciseId = `unit-${targetUnit}`; // 只保留 unit-X 格式
+      const progress = targetUnit / total;
+      saveProgressToBackend(preciseId, progress); 
+      currentPage.value = targetUnit;
+      rendition.display(`${mapItem.href}#${preciseId}`).then(() => {
+        showBars.value = false;
         isJumpLocked = true;
         setTimeout(() => { isJumpLocked = false; }, 500);
       });
-    } else {
-      console.warn("⚠️ 未在地图中找到该单元，可能输入了越界的数字");
-      inputPage.value = currentPage.value;
     }
-  } else {
-    // 🛡️ 极端兜底：如果没拿到地图，降级使用以前的章节比例估算法
-    const targetPercentage = targetUnit / total;
-    const targetSpineIndex = Math.floor(targetPercentage * epubBook.spine.length);
-    rendition.display(targetSpineIndex).then(() => {
-      showBars.value = false;
-      // 兜底方案没法提前知道准确的 unit，只能靠落地后的雷达扫描，所以这里同样加盾防抖即可
-      isJumpLocked = true;
-      setTimeout(() => { isJumpLocked = false; }, 500);
-    });
   }
 };
 
@@ -574,7 +520,6 @@ const cycleFontSize = () => {
   const currentIndex = sizes.indexOf(currentFontSize.value);
   currentFontSize.value = sizes[(currentIndex + 1) % sizes.length];
   rendition.themes.fontSize(`${currentFontSize.value}%`);
-  
   fetch('/api/user/prefs', {
     method: 'POST',
     headers: { 
