@@ -20,7 +20,8 @@
         <div class="w-px h-4 bg-neutral-800"></div>
         <button @click="searchInWiki" class="px-5 py-3 text-neutral-400 hover:text-white transition-colors">SEARCH</button>
         <div class="w-px h-4 bg-neutral-800"></div>
-        <button @click="markAnnotation" class="px-5 py-3 text-neutral-400 hover:text-white transition-colors">MARK</button>
+        <button v-if="!isSelectionOverlapping" @click="markAnnotation" class="px-5 py-3 text-neutral-400 hover:text-white transition-colors">MARK</button>
+        <button v-else @click="deleteOverlappingAnnotation" class="px-5 py-3 text-neutral-400 hover:text-white transition-colors">DELETE</button>
 
         <div class="absolute left-1/2 bottom-0 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent border-t-neutral-900"></div>
         <div class="absolute left-1/2 bottom-[-1px] transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-[7px] border-r-[7px] border-t-[7px] border-transparent border-t-neutral-800 -z-10"></div>
@@ -69,10 +70,11 @@
       <div class="absolute inset-0" @click="closeAnnotationPanel"></div>
       
       <div class="relative h-1/2 bg-neutral-900 border-t border-neutral-800 flex flex-col pointer-events-auto">
-        <div class="flex justify-start gap-8 px-8 py-4 border-b border-neutral-800 text-xs font-mono tracking-widest">
-           <button @click="copyActiveAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">COPY</button>
-           <button @click="searchActiveAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">SEARCH</button>
-           <button @click="deleteAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">DELETE</button>
+        <div class="flex justify-start gap-8 px-8 py-4 border-b border-neutral-800 text-xs font-mono tracking-widest bg-neutral-900">
+           <button @click="copyText" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">COPY</button>
+           <button @click="searchInWiki" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">SEARCH</button>
+           <button v-if="!isSelectionOverlapping" @click="markAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">MARK</button>
+           <button v-else @click="deleteOverlappingAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">DELETE</button>
         </div>
         <textarea 
           v-model="currentNoteText" 
@@ -109,14 +111,18 @@
     </div>
 
     <div v-if="showWiki" class="fixed inset-0 z-50 flex flex-col justify-end animate-fade-in">
-      <div class="absolute inset-0" @click="showWiki = false"></div>
+      <div class="absolute inset-0" @click="closeWiki"></div>
       
-      <div class="relative h-1/2 bg-neutral-900 border-t border-neutral-800 flex flex-col pointer-events-auto p-8 overflow-y-auto">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-xs font-bold font-mono tracking-[0.3em] text-neutral-400">REFERENCE PORTAL</h3>
-          <button @click="showWiki = false" class="text-xl text-neutral-600 hover:text-neutral-100 transition-colors outline-none focus:outline-none">×</button>
+      <div class="relative h-1/2 bg-neutral-900 border-t border-neutral-800 flex flex-col pointer-events-auto">
+        <div class="flex justify-start gap-8 px-8 py-4 border-b border-neutral-800 text-xs font-mono tracking-widest bg-neutral-900">
+          <button @click="copyText" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">COPY</button>
+          <button @click="switchToAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">ANNOTATION</button>
+          <button v-if="!isSelectionOverlapping" @click="markAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">MARK</button>
+          <button v-else @click="deleteOverlappingAnnotation" class="text-neutral-500 hover:text-neutral-100 transition-colors outline-none focus:outline-none">DELETE</button>
         </div>
-        <div class="wiki-content prose prose-neutral prose-invert max-w-none text-sm" v-html="wikiContent"></div>
+        <div class="flex-1 overflow-y-auto p-8">
+          <div class="wiki-content prose prose-neutral prose-invert max-w-none text-sm" v-html="wikiContent"></div>
+        </div>
       </div>
     </div>
 
@@ -172,6 +178,7 @@ let currentNodeIndex = 0;
 
 // --- ✨选词与批注专属状态 ---
 const showSelectionMenu = ref(false);
+const isSelectionOverlapping = ref(false);
 const selectionMenuPos = ref({ x: 0, y: 0 }); 
 const currentSelection = ref({ cfi: null, text: '' });
 const showAnnotationPanel = ref(false);
@@ -183,6 +190,7 @@ let isPointerDown = false;
 let pendingSelection = null;
 let uiWasOpen = false;   
 let tapActionTimer = null;
+let overlappingCfi = null;
 
 // ==========================================
 // 主题注入：适配 Paginated 模式的流式布局
@@ -549,7 +557,6 @@ const setupIframeClick = () => {
   rendition.on('mouseup', handlePointerUp);
   rendition.on('touchstart', recordStart);
   rendition.on('touchend', handlePointerUp);
-  rendition.off('click');
 };
 
 // 外层触控蒙版监听
@@ -597,6 +604,59 @@ const jumpToCfiAndClose = (cfiOrHref) => {
 // ==========================================
 // 3. 选词高亮与维基反代加载
 // ==========================================
+// ⚡ 核心提取引擎：将选区拆解为 [{nodeX, start, end}, ...] 的标准数组
+const extractSegments = (range, doc) => {
+  const segmentsMap = {};
+  
+  // 🐛 核心修复1：解决同段落划线时，祖先节点为纯文本导致无法遍历的 Bug
+  let root = range.commonAncestorContainer;
+  if (root.nodeType === 3) {
+    root = root.parentNode; // 强行提升到包裹它的 HTML 标签（如 <p> 或 <div>）
+  }
+
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let currentNode;
+
+  while ((currentNode = walker.nextNode())) {
+    // 只处理在选区内的文本节点
+    if (!range.intersectsNode(currentNode)) continue;
+
+    // 🎯 完美复刻你原本的提取逻辑：向上寻找最近的 [id]
+    const targetEl = currentNode.parentElement ? currentNode.parentElement.closest('[id]') : null;
+    if (!targetEl) continue;
+
+    const nodeId = targetEl.id;
+
+    // 📏 完全使用你最开始写的克隆 Range 算长度法
+    const preRange = doc.createRange();
+    preRange.selectNodeContents(targetEl);
+    // 把截断点设为当前小文本节点的头部
+    preRange.setEnd(currentNode, 0); 
+    const prefixLen = preRange.toString().length;
+
+    // 计算选区在这个特定文本节点上的起止点
+    let start = currentNode === range.startContainer ? range.startOffset : 0;
+    let end = currentNode === range.endContainer ? range.endOffset : currentNode.length;
+    
+    // 过滤掉选区边缘的空截断
+    if (start === end) continue;
+
+    // 绝对偏移量 = 前面所有兄弟文本的长度 + 自己内部的偏移量
+    const blockStart = prefixLen + start;
+    const blockEnd = prefixLen + end;
+
+    // 存入或自动合并跨标签的段落数据
+    if (!segmentsMap[nodeId]) {
+      segmentsMap[nodeId] = { nodeX: nodeId, startOffset: blockStart, endOffset: blockEnd };
+    } else {
+      segmentsMap[nodeId].startOffset = Math.min(segmentsMap[nodeId].startOffset, blockStart);
+      segmentsMap[nodeId].endOffset = Math.max(segmentsMap[nodeId].endOffset, blockEnd);
+    }
+  }
+  
+  return Object.values(segmentsMap);
+};
+
 const handleSelection = (cfiRange, contents) => {
   if (showBars.value) {
     contents.window.getSelection().removeAllRanges();
@@ -607,37 +667,46 @@ const handleSelection = (cfiRange, contents) => {
   if (!text) return;
 
   const range = contents.window.getSelection().getRangeAt(0);
+  
+  // 1. ✨ 用新引擎提取当前选区的精准坐标组
+  const currentSegments = extractSegments(range, contents.document);
+
+  // 2. ✨ 纯数据碰撞检测 (取代之前的 DOM 检测)
+  isSelectionOverlapping.value = false;
+  overlappingCfi = null;
+
+  for (const [savedCfi, savedData] of Object.entries(annotationDataMap)) {
+    // 只要有任意一段 nodeX 相同，且线段有交集，就算作碰撞！
+    const isOverlap = currentSegments.some(currSeg => {
+      return savedData.segments.some(savedSeg => {
+        if (currSeg.nodeX !== savedSeg.nodeX) return false;
+        // 核心数学：两线段相交的条件是 max(起点) < min(终点)
+        return Math.max(currSeg.startOffset, savedSeg.startOffset) < Math.min(currSeg.endOffset, savedSeg.endOffset);
+      });
+    });
+
+    if (isOverlap) {
+      isSelectionOverlapping.value = true;
+      overlappingCfi = savedCfi;
+      break;
+    }
+  }
+
+  // 计算菜单弹出的物理位置 (保持不变)
   const rect = range.getBoundingClientRect();
   const iframe = contents.document.defaultView.frameElement;
   const iframeRect = iframe.getBoundingClientRect();
-
   const pos = { 
     x: rect.left + iframeRect.left + (rect.width / 2), 
     y: rect.top + iframeRect.top 
   };
 
-  // 🎯 寻找 nodeX：向上寻找最近的带有 ID 的标签
-  let startNode = range.startContainer;
-  if (startNode.nodeType === 3) startNode = startNode.parentNode;
-  let targetElement = startNode.closest('[id]'); 
-  let nodeId = targetElement ? targetElement.id : 'unknown_node';
-
-  // 📏 计算偏移量：即便跨段落，偏移量也相对于 startNode 所在的这个 nodeId
-  let startOffset = 0;
-  if (targetElement) {
-    const preRange = range.cloneRange();
-    preRange.selectNodeContents(targetElement);
-    preRange.setEnd(range.startContainer, range.startOffset);
-    startOffset = preRange.toString().length;
-  }
-
+  // 3. ✨ 组装全新的纯净数据包
   const selectionData = {
-    cfi: cfiRange, // 仅用于前端绘制，不进数据库
+    cfi: cfiRange, // cfi 仅作给 epubjs 绘图用的身份证
     text: text, 
     pos: pos, 
-    nodeX: nodeId,
-    startOffset: startOffset,
-    endOffset: startOffset + text.length
+    segments: currentSegments // 👈 存入刚刚提取的精美数组！
   };
 
   if (isPointerDown) {
@@ -647,7 +716,7 @@ const handleSelection = (cfiRange, contents) => {
     currentSelection.value = selectionData;
     showSelectionMenu.value = true;
   }
-}; // 确保这里只有一个结束大括号
+};
 
 const closeSelection = () => {
   showSelectionMenu.value = false;
@@ -656,47 +725,128 @@ const closeSelection = () => {
     if (contents) contents.window.getSelection().removeAllRanges(); // 取消原生的蓝色选区
   }
 };
+const clearNativeSelection = () => {
+  if (rendition) {
+    const contents = rendition.getContents()[0];
+    if (contents) contents.window.getSelection().removeAllRanges();
+  }
+};
+const closeWiki = () => {
+  showWiki.value = false;
+  clearNativeSelection(); // ✨ 退出 Wiki 时，清除原生的蓝色高亮
+};
+
+const closeAnnotationPanel = () => {
+  showAnnotationPanel.value = false;
+  clearNativeSelection(); // ✨ 退出 批注面板 时，也清除蓝色高亮
+  // TODO: 后续可在这里触发后端保存接口
+};
+
+const deleteOverlappingAnnotation = () => {
+  if (overlappingCfi) {
+    rendition.annotations.remove(overlappingCfi, 'highlight');
+    delete annotationDataMap[overlappingCfi];
+    
+    isSelectionOverlapping.value = false;
+    overlappingCfi = null;
+    activeHighlightCfi.value = null; 
+    
+    currentNoteText.value = ''; 
+    
+    showSelectionMenu.value = false; 
+    showAnnotationPanel.value = false; 
+    clearNativeSelection(); 
+  }
+};
+
+const syncNote = () => {
+  // ✨ 核心机制：只要还没 MARK，只要你敲下第一个字母，系统立刻自动帮你执行 MARK！
+  // 这样底层的蓝色高亮会瞬间变成灰色的持久高亮，完美实现“打字即标记”
+  if (!isSelectionOverlapping.value) {
+    markAnnotation(); 
+  }
+  
+  // 此时绝对已经是已 MARK 状态了，安全地实时同步笔记文本
+  if (overlappingCfi && annotationDataMap[overlappingCfi]) {
+    annotationDataMap[overlappingCfi].note = currentNoteText.value;
+  }
+};
+const copyText = () => {
+  if (currentSelection.value && currentSelection.value.text) {
+    navigator.clipboard.writeText(currentSelection.value.text);
+    if (!showWiki.value && !showAnnotationPanel.value) {
+      showSelectionMenu.value = false;
+      clearNativeSelection(); // 复制完，选单和高亮全消失
+    }
+  }
+};
+
+const searchInWiki = () => {
+  if (currentSelection.value && currentSelection.value.text) {
+    showSelectionMenu.value = false; // 仅仅关闭浮动选项框
+    showAnnotationPanel.value = false; 
+    summonReference(currentSelection.value.text);
+    // 🎯 注意：这里故意不调用 clearNativeSelection()，所以蓝色高亮会完美保留！
+  }
+};
+
+const switchToAnnotation = () => {
+  showSelectionMenu.value = false; // 仅仅关闭浮动选项框
+  showWiki.value = false;
+  currentNoteText.value = isSelectionOverlapping.value && overlappingCfi ? (annotationDataMap[overlappingCfi]?.note || '') : '';
+  showAnnotationPanel.value = true;
+  // 🎯 注意：这里也不调用 clearNativeSelection()，保留蓝色高亮
+};
+
 
 const markAnnotation = () => {
   const cfi = currentSelection.value.cfi;
   
-  // 🎯 存入包含精确位置的完美数据包
-  annotationDataMap[cfi] = {
-    text: currentSelection.value.text,
-    nodeX: currentSelection.value.nodeX,
-    startOffset: currentSelection.value.startOffset, // 存入
-    endOffset: currentSelection.value.endOffset,     // 存入
-    note: '' 
-  };
+  if (!annotationDataMap[cfi]) {
+    annotationDataMap[cfi] = {
+      text: currentSelection.value.text,
+      segments: currentSelection.value.segments, 
+      note: currentNoteText.value 
+    };
+  } else {
+    annotationDataMap[cfi].note = currentNoteText.value;
+  }
+
+  isSelectionOverlapping.value = true;
+  overlappingCfi = cfi;
+  activeHighlightCfi.value = cfi;
+
   rendition.annotations.add(
     'highlight', 
     cfi, 
     {}, 
     (e) => {
+      const contents = rendition.getContents()[0];
+      const selection = contents ? contents.window.getSelection() : null;
+      if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) return;
+
       clearTimeout(tapActionTimer);
+      isSelectionOverlapping.value = true;
+      overlappingCfi = cfi;
       activeHighlightCfi.value = cfi;
-      // 🎯 核心：再次点击时，把字典里存的笔记读取到输入框里
+      currentSelection.value = { 
+        text: annotationDataMap[cfi].text, 
+        cfi: cfi,
+        segments: annotationDataMap[cfi].segments
+      };
+
       currentNoteText.value = annotationDataMap[cfi].note || '';     
       showAnnotationPanel.value = true;
     }, 
     'custom-hl', 
     { "fill": "#808080", "fill-opacity": "0.3", "mix-blend-mode": "multiply" } 
   );
-  closeSelection();
+  
+  showSelectionMenu.value = false; // 隐藏小浮窗
+  clearNativeSelection(); // 🎯 MARK 之后，取消原生的蓝色选区，让底下的灰色专属高亮无缝显现出来！
 };
-// --- ✨ 2. 新增：实时同步打字内容到字典 ---
-const syncNote = () => {
-  if (activeHighlightCfi.value && annotationDataMap[activeHighlightCfi.value]) {
-    annotationDataMap[activeHighlightCfi.value].note = currentNoteText.value;
-  }
-};
+
 // --- ✨ 3. 升级：标准化的关闭动作 ---
-const closeAnnotationPanel = () => {
-  showAnnotationPanel.value = false;
-  // TODO: 后端联调时，在这个位置触发 fetch/axios 请求，
-  // 把 annotationDataMap[activeHighlightCfi.value] 发送给服务器保存
-  console.log("💾 当前高亮数据已暂存:", annotationDataMap[activeHighlightCfi.value]);
-};
 
 const copyActiveAnnotation = () => {
   const data = annotationDataMap[activeHighlightCfi.value];
