@@ -191,6 +191,10 @@ let pendingSelection = null;
 let uiWasOpen = false;   
 let tapActionTimer = null;
 let overlappingCfi = null;
+let isGlobalShieldActive = false; // 护盾是否开启
+let globalShieldTimer = null;     // 护盾倒计时器
+let touchStartTime = 0;           // 记录按下瞬间的时间（用于判断长按）
+let isDragging = false;
 
 // ==========================================
 // 主题注入：适配 Paginated 模式的流式布局
@@ -334,11 +338,28 @@ const initReader = async () => {
     rendition.on('rendered', (e, iframe) => {
       const doc = iframe.document;
 
+      doc.addEventListener('touchmove', () => { 
+        isDragging = true; 
+      }, { passive: true });
+      
+      doc.addEventListener('mousemove', () => { 
+        isDragging = true; 
+      }, { passive: true });
+
       doc.addEventListener('selectionchange', () => {
         const selection = iframe.window.getSelection();
+        if (isPointerDown && Date.now() - touchStartTime < 300 && !isDragging) {
+           if (selection && !selection.isCollapsed) {
+               selection.removeAllRanges();
+               return; // 瞬间拦截，不往下走了
+           }
+        }
         if (!selection || selection.isCollapsed || selection.toString().trim() === '') {
+          // 这里太频繁了就不打日志了
           showSelectionMenu.value = false;
           pendingSelection = null;
+        } else {
+          showSelectionMenu.value = false; 
         }
       });
 
@@ -354,8 +375,32 @@ const initReader = async () => {
         }, 50); 
       };
 
-      doc.addEventListener('touchend', finalizeSelection);
-      doc.addEventListener('mouseup', finalizeSelection);
+      // 🚀 新增：光标拖拽结束侦测器
+      const handleHandleDragEnd = () => {
+        const selection = iframe.window.getSelection();
+        // 如果手指离开时，原生选区还在，说明用户刚拉完光标！
+        if (selection && !selection.isCollapsed && selection.toString().trim() !== '') {
+          const contents = rendition.getContents()[0];
+          if (contents) {
+            try {
+              const range = selection.getRangeAt(0);
+              // 利用 epubjs 内部方法，把原生 range 重新转成你需要的 cfiRange
+              const cfiRange = contents.cfiFromRange(range); 
+              if (cfiRange) {
+                // 主动喂给你的核心处理逻辑，重新计算坐标和文本！
+                handleSelection(cfiRange, contents); 
+              }
+            } catch(err) {
+              console.warn("光标转换失败", err);
+            }
+          }
+        }
+        finalizeSelection();
+      };
+
+      // ⚠️ 替换掉你原有的 touchend / mouseup 监听
+      doc.addEventListener('touchend', handleHandleDragEnd);
+      doc.addEventListener('mouseup', handleHandleDragEnd);
     });
 
 // --- 3. 🚀 极速渲染与一键空降 (极简重构版) ---
@@ -379,8 +424,6 @@ if (savedCfi && savedCfi.startsWith('unit-') && unitMap.length > 0) {
 currentPage.value = initialPageNumber;
 inputPage.value = initialPageNumber;
 totalPages.value = props.book.total_units || '-';
-
-console.log("🪂 目标坐标:", targetLocation || "起点");
 
 try {
   // 执行空降
@@ -475,12 +518,22 @@ setTimeout(() => {
 // ==========================================
 // 2. 交互与布局控制 (极致简化版)
 // ==========================================
+const activateGlobalShield = (duration = 400) => {
+  isGlobalShieldActive = true;
+  clearTimeout(globalShieldTimer); // 重新计算时间，防止多次连续触发导致时间错乱
+  globalShieldTimer = setTimeout(() => {
+    isGlobalShieldActive = false;
+  }, duration);
+};
 // iframe 内部点击监听
 const setupIframeClick = () => {
   let startX = 0;
   let startY = 0;
 
   const recordStart = (e) => {
+    if (isGlobalShieldActive) return; // 🛡️ 护盾开启时，彻底无视按压
+    touchStartTime = Date.now(); // ⏱️ 记录按下时间
+    isDragging = false;
     isPointerDown = true;
     pendingSelection = null;
 
@@ -496,6 +549,8 @@ const setupIframeClick = () => {
   };
 
   const handlePointerUp = (e) => {
+    const costTime = Date.now() - touchStartTime;
+    if (isGlobalShieldActive) return;
     isPointerDown = false; 
     if (pendingSelection) {
       setTimeout(() => {
@@ -508,7 +563,9 @@ const setupIframeClick = () => {
       }, 50);
     }
     const now = Date.now();
-    if (now - lastClickTime < 300) return; 
+    if (now - lastClickTime < 300) {
+      return; 
+    }
     lastClickTime = now;
 
     const event = e.changedTouches ? e.changedTouches[0] : e;
@@ -531,26 +588,41 @@ const setupIframeClick = () => {
       return; 
     }
 
-    if (deltaX > 10 || deltaY > 10) return;
+    if (deltaX > 10 || deltaY > 10) {
+      return;
+    }
 
     const contents = rendition.getContents()[0];
     const selection = contents ? contents.window.getSelection() : null;
-    if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) return;
-
+    if (costTime < 400) {
+      if (selection) selection.removeAllRanges();
+    } else {
+      if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) {
+        return; 
+      }
+    }
     // ⚡ 修复 2：给“翻页/呼出菜单”加上 80ms 的生死时速延迟！
     // 为什么？为了让 Epub.js 有时间去触发“点击了高亮块”的事件
     clearTimeout(tapActionTimer);
     tapActionTimer = setTimeout(() => {
       const screenWidth = window.innerWidth;
       const realX = endX % screenWidth; 
+      let isPageTurned = false; 
+
       if (realX < screenWidth * 0.3) {
         rendition.prev();
+        isPageTurned = true;
       } else if (realX > screenWidth * 0.7) {
         rendition.next();
+        isPageTurned = true;
       } else {
-        showBars.value = !showBars.value; 
+        showBars.value = !showBars.value;
       }
-    }, 80); // 80ms 对人类视觉是毫无延迟感的
+
+      if (isPageTurned) {
+        activateGlobalShield(400);
+      }
+    }, 80); 
   };
 
   rendition.on('mousedown', recordStart);
@@ -561,16 +633,23 @@ const setupIframeClick = () => {
 
 // 外层触控蒙版监听
 const handleTouch = (event) => {
+  if (isGlobalShieldActive) return;
   const rect = readerMain.value.getBoundingClientRect();
   const clickX = event.clientX - rect.left;
   const width = rect.width;
   if (showTocOverlay.value || showWiki.value) return;
+  let isPageTurned = false;
   if (clickX < width * 0.3) {
     rendition.prev();
+    isPageTurned = true;
   } else if (clickX > width * 0.7) {
     rendition.next();
+    isPageTurned = true;
   } else {
     showBars.value = !showBars.value;
+  }
+  if (isPageTurned) {
+    activateGlobalShield(400);
   }
 };
 
@@ -658,6 +737,18 @@ const extractSegments = (range, doc) => {
 };
 
 const handleSelection = (cfiRange, contents) => {
+  
+  if (isGlobalShieldActive) {
+    contents.window.getSelection().removeAllRanges();
+    return;
+  }
+  
+  const costTime = Date.now() - touchStartTime;
+  if (costTime < 400 && !isDragging) {
+    contents.window.getSelection().removeAllRanges();
+    return;
+  }
+
   if (showBars.value) {
     contents.window.getSelection().removeAllRanges();
     return;
@@ -853,7 +944,6 @@ const copyActiveAnnotation = () => {
   if (data) {
     navigator.clipboard.writeText(data.text);
     // 可选：加个轻微反馈
-    console.log("Copied:", data.text);
   }
 };
 
