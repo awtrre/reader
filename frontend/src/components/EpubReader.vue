@@ -192,7 +192,7 @@ const applyTheme = () => {
     },
     // 6. ✨ 新增：高亮防覆盖机制
     '.custom-hl': {
-      'pointer-events': 'auto !important',       // 保证它依然能被点击
+      'pointer-events': 'all !important',       // 保证它依然能被点击
       'user-select': 'none !important',          // 彻底禁止在这个高亮块上二次划词
       '-webkit-user-select': 'none !important'
     }
@@ -382,26 +382,30 @@ const initReader = async () => {
 // ==========================================
 // 2. 交互与布局控制 (极致简化版)
 // ==========================================
-// iframe 内部点击监听
+// iframe 内部点击监听 (全局护盾稳定版)
 const setupIframeClick = () => {
   let startX = 0;
   let startY = 0;
 
   const recordStart = (e) => {
     isPointerDown = true;
-      // ✨ 向子组件查询：当前是否有任何菜单处于打开状态？
-      uiWasOpen = showBars.value || showTocOverlay.value || selectionOverlayRef.value?.isAnyUIOpen();
-      
-      selectionOverlayRef.value?.hideMenuOnly(); // 点按瞬间强行闭合所有UI
+    
+    // 拍下快照：当前是否有UI挡着？
+    uiWasOpen = showBars.value || showTocOverlay.value || selectionOverlayRef.value?.isAnyUIOpen();
+    selectionOverlayRef.value?.hideMenuOnly(); 
 
-      const event = e.changedTouches ? e.changedTouches[0] : e;
-      startX = event.clientX;
-      startY = event.clientY;
+    const event = e.changedTouches ? e.changedTouches[0] : e;
+    startX = event.clientX;
+    startY = event.clientY;
   };
 
   const handlePointerUp = (e) => {
-    isPointerDown = false;
+    isPointerDown = false; 
+
+    // 🛡️ 防线1：高亮绝对防御锁 (防止点开笔记时触发翻页)
     if (tapLock) return;
+
+    // 🛡️ 防线2：幽灵点击防抖
     const now = Date.now();
     if (now - lastClickTime < 300) return; 
     lastClickTime = now;
@@ -412,26 +416,24 @@ const setupIframeClick = () => {
     const deltaX = Math.abs(endX - startX);
     const deltaY = Math.abs(endY - startY);
 
-
-    // 🛡️ 拦截器 1：使用刚拍好的“快照”来判断！
-    // 如果按下瞬间有 UI 挡着，说明用户的核心诉求是“退出 UI”，绝对不许翻页！
+    // 🛡️ 防线3：退出 UI 拦截
     if (uiWasOpen) {
       showBars.value = false;
       showTocOverlay.value = false;
-
       const contents = rendition.getContents()[0];
       if (contents) contents.window.getSelection().removeAllRanges();
       return; 
     }
 
+    // 🛡️ 防线4：滑动防误触
     if (deltaX > 10 || deltaY > 10) return;
 
+    // 🛡️ 防线5：原生选区拦截
     const contents = rendition.getContents()[0];
     const selection = contents ? contents.window.getSelection() : null;
     if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) return;
 
-    // ⚡ 修复 2：给“翻页/呼出菜单”加上 80ms 的生死时速延迟！
-    // 为什么？为了让 Epub.js 有时间去触发“点击了高亮块”的事件
+    // 终点：执行翻页
     clearTimeout(tapActionTimer);
     tapActionTimer = setTimeout(() => {
       const screenWidth = window.innerWidth;
@@ -443,7 +445,7 @@ const setupIframeClick = () => {
       } else {
         showBars.value = !showBars.value; 
       }
-    }, 80); // 80ms 对人类视觉是毫无延迟感的
+    }, 80); 
   };
 
   rendition.on('mousedown', recordStart);
