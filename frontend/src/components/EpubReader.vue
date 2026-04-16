@@ -153,6 +153,10 @@ const applyTheme = () => {
   if (!rendition) return;
   
   rendition.themes.default({
+    'body': {
+      'user-select': 'none !important',
+      '-webkit-user-select': 'none !important',
+    },
     // 1. 地毯式颜色覆盖：把所有基础和内联标签的底色变黑，文字变灰
     'body, p, span, a, b, i, em, strong, div, blockquote, ul, ol, li, section, article': {
       'background-color': '#000000 !important',
@@ -397,12 +401,19 @@ const setupIframeClick = () => {
     const event = e.changedTouches ? e.changedTouches[0] : e;
     startX = event.clientX;
     startY = event.clientY;
+
+    // 🛑 核心修改：如果当前有菜单开着（说明这一击是为了关闭菜单）
+    // 那么绝对不要把事件传给子组件，直接掐断长按划词的可能性！
+    if (!uiWasOpen) {
+      selectionOverlayRef.value?.processPointerDown(e, startX, startY);
+    }
   };
 
   const handlePointerUp = (e) => {
     isPointerDown = false; 
 
     // 🛡️ 防线1：高亮绝对防御锁 (防止点开笔记时触发翻页)
+    const isLongPress = selectionOverlayRef.value?.processPointerUp();
     if (tapLock) return;
 
     // 🛡️ 防线2：幽灵点击防抖
@@ -421,7 +432,7 @@ const setupIframeClick = () => {
       showBars.value = false;
       showTocOverlay.value = false;
       const contents = rendition.getContents()[0];
-      if (contents) contents.window.getSelection().removeAllRanges();
+      selectionOverlayRef.value?.clearNativeSelection();
       return; 
     }
 

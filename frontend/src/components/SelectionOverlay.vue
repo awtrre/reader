@@ -78,6 +78,7 @@ const showSelectionMenu = ref(false);
 const selectionMenuPos = ref({ x: 0, y: 0 }); 
 const currentSelection = ref({ cfi: null, text: '', segments: [] });
 const isSelectionOverlapping = ref(false);
+const isLongPressTriggered = ref(false);
 const showAnnotationPanel = ref(false);
 const currentNoteText = ref('');
 const showWiki = ref(false);
@@ -91,6 +92,7 @@ const isGlobalShieldActive = ref(false);
 let pendingSelection = null;
 let overlappingCfi = null;
 let panelOpenTime = 0;
+let longPressTimer = null;
 
 const triggerTouchShield = () => {
   isGlobalShieldActive.value = true;
@@ -143,14 +145,162 @@ const extractSegments = (range, doc) => {
   }
   return Object.values(segmentsMap);
 };
+const setSelectionLayerActive = (isActive) => {
+  if (!props.rendition) return;
+  const contents = props.rendition.getContents()[0];
+  if (!contents) return;
 
+  const doc = contents.document;
+  let styleEl = doc.getElementById('magic-selection-layer');
+
+  if (!styleEl) {
+    styleEl = doc.createElement('style');
+    styleEl.id = 'magic-selection-layer';
+    doc.head.appendChild(styleEl);
+  }
+
+  if (isActive) {
+    // 🔓 揭开图层：让所有东西都变 text，但保护已有高亮 custom-hl 防误触
+    styleEl.innerHTML = `
+      * { 
+        user-select: text !important; 
+        -webkit-user-select: text !important; 
+      }
+      .custom-hl { 
+        user-select: none !important; 
+        -webkit-user-select: none !important; 
+      }
+    `;
+  } else {
+    // 🔒 盖上图层：全局封死，进入翻页模式
+    styleEl.innerHTML = `
+      * { 
+        user-select: none !important; 
+        -webkit-user-select: none !important; 
+      }
+    `;
+  }
+};
+
+// 工具函数：坐标转选区 (完全采用你的无缝衔接逻辑)
+const selectWordAtPoint = (x, y) => {
+  const contents = props.rendition.getContents()[0];
+  if (!contents) return;
+  
+  const doc = contents.document;
+  const win = contents.window;
+  let range;
+
+  if (doc.caretRangeFromPoint) {
+    range = doc.caretRangeFromPoint(x, y);
+  } else if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(x, y);
+    if (pos) {
+      range = doc.createRange();
+      range.setStart(pos.offsetNode, pos.offset);
+      range.setEnd(pos.offsetNode, pos.offset);
+    }
+  }
+
+  if (range) {
+    const selection = win.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    
+    // 技巧：向后扩选一个字，让用户立刻看到蓝块反馈
+    try {
+      win.getSelection().modify('extend', 'forward', 'character');
+    } catch(e) {}
+  }
+};
+const getRangeAtPoint = (doc, x, y) => {
+  if (doc.caretRangeFromPoint) return doc.caretRangeFromPoint(x, y);
+  if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(x, y);
+    if (pos) {
+      const range = doc.createRange();
+      range.setStart(pos.offsetNode, pos.offset);
+      range.setEnd(pos.offsetNode, pos.offset);
+      return range;
+    }
+  }
+  return null;
+};
+const processPointerDown = (e, x, y) => {
+  isLongPressTriggered.value = false;
+  if (e.target && e.target.classList && e.target.classList.contains('custom-hl')) return;
+
+  const contents = props.rendition.getContents()[0];
+  if (!contents) return;
+  const doc = contents.document;
+  const win = contents.window;
+
+  // ⏱️ 修改 1：长按时间从 450ms 缩短到 300ms，更加跟手
+  longPressTimer = setTimeout(() => {
+    isLongPressTriggered.value = true;
+    setSelectionLayerActive(true); // 🔓 揭开图层
+
+    const startRange = getRangeAtPoint(doc, x, y);
+    if (startRange) {
+      const selection = win.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(startRange);
+      try { selection.modify('extend', 'forward', 'character'); } catch(err) {}
+
+      const onMove = (moveEvt) => {
+        if (!isLongPressTriggered.value) return;
+        const moveX = moveEvt.clientX || (moveEvt.touches && moveEvt.touches[0].clientX);
+        const moveY = moveEvt.clientY || (moveEvt.touches && moveEvt.touches[0].clientY);
+
+        const currentRange = getRangeAtPoint(doc, moveX, moveY);
+        if (currentRange && selection.setBaseAndExtent) {
+          selection.setBaseAndExtent(
+            startRange.startContainer, startRange.startOffset,
+            currentRange.startContainer, currentRange.startOffset
+          );
+        }
+      };
+
+      const onUp = () => {
+        doc.removeEventListener('mousemove', onMove);
+        doc.removeEventListener('touchmove', onMove);
+        doc.removeEventListener('mouseup', onUp);
+        doc.removeEventListener('touchend', onUp);
+      };
+
+      doc.addEventListener('mousemove', onMove);
+      doc.addEventListener('touchmove', onMove);
+      doc.addEventListener('mouseup', onUp);
+      doc.addEventListener('touchend', onUp);
+    }
+
+    if (navigator.vibrate) navigator.vibrate(40);
+  }, 300); 
+};
+
+const processPointerUp = () => {
+  clearTimeout(longPressTimer); 
+  return isLongPressTriggered.value; // 返回 true 说明刚才是在长按划线，EpubReader 必须 return 终止翻页
+};
+
+// 重新闭环：清空选区的同时，一定要把玻璃盖回去！
+const clearNativeSelection = () => {
+  if (props.rendition) {
+    const contents = props.rendition.getContents()[0];
+    if (contents) {
+      contents.window.getSelection().removeAllRanges();
+      // 🔒 盖上玻璃：进入翻页模式
+      setSelectionLayerActive(false); 
+    }
+  }
+};
 // --- 对外暴露的通信接口 1：处理原生选区 ---
-const processSelection = (cfiRange, text, range, contents, isPointerDown) => {
+const processSelection = (cfiRange, text, range, contents, isPointerDownFlag) => {
   const currentSegments = extractSegments(range, contents.document);
   isSelectionOverlapping.value = false;
   overlappingCfi = null;
 
-  // 1. 碰撞检测 (保持原样不动)
+  // 1. 碰撞检测 (判断是否划到了已有的高亮上)
   for (const [savedCfi, savedData] of Object.entries(annotationDataMap)) {
     const isOverlap = currentSegments.some(currSeg => {
       return savedData.segments.some(savedSeg => {
@@ -165,7 +315,7 @@ const processSelection = (cfiRange, text, range, contents, isPointerDown) => {
     }
   }
 
-  // 2. 计算物理位置 (保持原样不动)
+  // 2. 计算物理位置 (用于决定菜单弹出的坐标)
   const rect = range.getBoundingClientRect();
   const iframe = contents.document.defaultView.frameElement;
   const iframeRect = iframe.getBoundingClientRect();
@@ -177,28 +327,32 @@ const processSelection = (cfiRange, text, range, contents, isPointerDown) => {
   const selectionData = { cfi: cfiRange, text: text, pos: pos, segments: currentSegments };
 
   // 3. 核心分发逻辑
-  if (isPointerDown) {
-    // 如果手指还按在屏幕上拖拽，只需挂起数据，千万不要清空选区，否则拖拽会中断
+  if (isPointerDownFlag) {
+    // 拖拽中：只挂起数据，千万不要清空选区
     pendingSelection = selectionData;
   } else {
-    // 💡 手指抬起，准备显示自定义菜单
+    // 💡 拖拽结束，手指抬起，准备显示菜单
     selectionMenuPos.value = pos;
     currentSelection.value = selectionData;
 
-    // ✨ 狸猫换太子：如果没有重叠已有的高亮，绘制“临时高亮”底色
+    // ✨ 狸猫换太子：绘制“临时高亮”底色
     if (!isSelectionOverlapping.value) {
       props.rendition.annotations.add(
         'highlight', cfiRange, {}, null, 'temp-hl', 
-        { "fill": "#525252", "fill-opacity": "0.4" } // 与 ::selection 类似的深灰底色
+        // 🎨 核心修复：使用半透明纯白，告别脏灰块
+        { "fill": "#ffffff", "fill-opacity": "0.15" } 
       );
-      // 记录 CFI，稍后关闭菜单时需要用 clearTempHighlight() 清除它
       tempHighlightCfi.value = cfiRange;
     }
 
-    // ✨ 绝杀：瞬间清空原生选区，迫使 iOS 放弃弹出系统拷贝菜单！
+    // 瞬间清空原生选区（蓝条）
     contents.window.getSelection().removeAllRanges();
 
-    // 最后再弹出我们自己的极简菜单
+    // 🔒 核心修复：菜单马上要出来了，赶紧把“玻璃”盖回去！
+    // 这样用户在菜单显示期间，怎么乱划都不会再触发选词了
+    setSelectionLayerActive(false);
+
+    // 弹出自定义极简菜单
     showSelectionMenu.value = true;
   }
 };
@@ -244,13 +398,6 @@ const isAnyUIOpen = () => {
 };
 
 // --- 内部逻辑层 (完全复用原代码) ---
-const clearNativeSelection = () => {
-  if (props.rendition) {
-    const contents = props.rendition.getContents()[0];
-    if (contents) contents.window.getSelection().removeAllRanges();
-  }
-};
-
 const closeWiki = () => {
   showWiki.value = false;
   clearNativeSelection(); 
@@ -317,8 +464,11 @@ const switchToAnnotation = () => {
 const markAnnotation = () => {
   triggerTouchShield();
   const cfi = currentSelection.value.cfi;
+  
+  // 清除刚才画的临时半透明高亮
   clearTempHighlight();
   
+  // 保存数据字典
   if (!annotationDataMap[cfi]) {
     annotationDataMap[cfi] = {
       text: currentSelection.value.text,
@@ -333,15 +483,17 @@ const markAnnotation = () => {
   overlappingCfi = cfi;
   activeHighlightCfi.value = cfi;
 
+  // 绘制最终高亮块
   props.rendition.annotations.add(
     'highlight', cfi, {}, 
     (e) => {
+      // 这是点击已存在的高亮块时触发的事件
       triggerTouchShield();
       const contents = props.rendition.getContents()[0];
       const selection = contents ? contents.window.getSelection() : null;
       if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) return;
 
-      emit('cancel-tap'); // ✨ 通知父级掐断翻页定时器
+      emit('cancel-tap'); // 通知父级掐断翻页定时器
       
       isSelectionOverlapping.value = true;
       overlappingCfi = cfi;
@@ -355,10 +507,13 @@ const markAnnotation = () => {
       panelOpenTime = Date.now();
     }, 
     'custom-hl', 
-    { "fill": "#808080", "fill-opacity": "0.3", "mix-blend-mode": "multiply" } 
+    // 🎨 核心修复：同样使用纯净的半透明白色，稍微亮一点代表已确认（去掉 multiply）
+    { "fill": "#ffffff", "fill-opacity": "0.22" } 
   );
   
   showSelectionMenu.value = false; 
+  
+  // 🔒 核心修复：清理原生选区，且这个函数内部自带 setSelectionLayerActive(false) 封印功能
   clearNativeSelection(); 
 };
 
@@ -382,7 +537,11 @@ defineExpose({
   showPendingMenu,
   closeAll,
   isAnyUIOpen,
-  hideMenuOnly
+  hideMenuOnly,
+  processPointerDown,
+  processPointerUp,
+  clearNativeSelection,
+  setSelectionLayerActive
 });
 </script>
 
