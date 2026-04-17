@@ -425,6 +425,7 @@ const isAnyUIOpen = () => {
 const closeWiki = () => {
   showWiki.value = false;
   clearNativeSelection(); 
+  clearTempHighlight();
 };
 
 const closeAnnotationPanel = () => {
@@ -432,6 +433,7 @@ const closeAnnotationPanel = () => {
   triggerTouchShield();
   showAnnotationPanel.value = false;
   clearNativeSelection(); 
+  clearTempHighlight();
 };
 
 const deleteOverlappingAnnotation = () => {
@@ -446,6 +448,7 @@ const deleteOverlappingAnnotation = () => {
     
     showSelectionMenu.value = false; 
     showAnnotationPanel.value = false; 
+    showWiki.value = false;
     clearNativeSelection(); 
   }
 };
@@ -472,7 +475,6 @@ const searchInWiki = () => {
   if (currentSelection.value && currentSelection.value.text) {
     showSelectionMenu.value = false; 
     showAnnotationPanel.value = false; 
-    clearTempHighlight();
     summonReference(currentSelection.value.text);
   }
 };
