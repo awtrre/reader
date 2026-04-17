@@ -207,7 +207,7 @@ const updateLayoutMode = () => {
   const h = window.innerHeight;
   
   // 核心逻辑：宽度 >= 768，且 长宽比 > 1.1（明显的横屏状态）才开启双排
-  const targetSpread = (w >= 768 && (w / h) > 1.1) ? 'auto' : 'none';
+  const targetSpread = (w >= 768 && (w / h) >=1.25) ? 'auto' : 'none';
   
   // 只有在状态确实需要改变时，才触发 epub.js 重新排版
   if (rendition.settings.spread !== targetSpread) {
@@ -283,7 +283,10 @@ const initReader = async () => {
     // 4. Iframe 内部事件拦截：交给子组件 SelectionOverlay 处理 [cite: 2]
     rendition.on('rendered', (e, iframe) => {
       const doc = iframe.document;
-      
+      // ✨ 新增防线：彻底禁用浏览器默认的拖拽行为（防止长按文字后被当成文件/文本拖走）
+      doc.addEventListener('dragstart', (event) => {
+        event.preventDefault();
+      });
       // 这个可以保留，未来可能有用
       doc.addEventListener('selectionchange', () => {
         const selection = iframe.window.getSelection();
