@@ -10,7 +10,7 @@
         
         <h1 
           @click="resetToHome"
-          class="text-2xl md:text-4xl font-light tracking-[0.5em] text-center flex-1 text-neutral-100 cursor-pointer hover:text-white transition-colors duration-300"
+          class="select-none text-2xl md:text-4xl font-light tracking-[0.5em] text-center flex-1 text-neutral-100 cursor-pointer hover:text-white transition-colors duration-300"
         >
           S U L I B R A R Y
         </h1>
@@ -18,7 +18,7 @@
         <div class="flex-1 flex justify-end items-center gap-4 w-full md:w-auto">
           <button
             @click="toggleTab"
-            class="text-[10px] md:text-xs font-bold tracking-[0.2em] text-neutral-500 hover:text-neutral-100 transition-colors duration-300 whitespace-nowrap uppercase"
+            class="select-none text-[10px] md:text-xs font-bold tracking-[0.2em] text-neutral-500 hover:text-neutral-100 transition-colors duration-300 whitespace-nowrap uppercase"
           >
             {{ activeTab === 'bookstore' ? 'BOOKSHELF' : 'BOOKSTORE' }}
           </button>

@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="select-none">
     <div class="mb-6 border-b border-[#333] pb-2 flex justify-between items-end">
       <h2 class="text-sm tracking-[0.2em] text-neutral-400">SEARCH RESULTS</h2>
       <span class="text-xs text-neutral-600 font-mono">{{ results.length }} items found</span>
