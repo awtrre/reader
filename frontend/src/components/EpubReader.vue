@@ -1,4 +1,5 @@
 <template>
+  <div ref="maskRef" class="mask"></div>
   <div class="fixed inset-0 bg-neutral-900 text-neutral-100 flex overflow-hidden z-50 font-sans select-none">
     
     <div class="relative h-full flex-grow border-r border-neutral-800 bg-black flex items-center justify-center overflow-hidden" ref="readerMain">
@@ -125,6 +126,7 @@ const backendApi = '/api';
 const showBars = ref(false);
 const showTocOverlay = ref(false);
 const activeOverlayTab = ref('toc');
+const maskRef = ref(null);
 
 // --- 数据与分页状态 ---
 const tocList = ref([]);
@@ -133,6 +135,7 @@ const totalPages = ref('-');
 const inputPage = ref('-');
 const currentFontSize = ref(100);
 let isJumpLocked = false;
+let resizeTimer = null;
 
 // --- TTS 引擎状态 ---
 const isReading = ref(false);
@@ -201,30 +204,65 @@ const applyTheme = () => {
 // 1. 生命周期与初始化 (重构极简版)
 // ==========================================
 // === 新增：长宽比排版计算器 ===
-const updateLayoutMode = () => {
-  if (!rendition) return;
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  if (selectionOverlayRef.value) {
-    selectionOverlayRef.value.hideMenuOnly(); 
-  }
-  // 核心逻辑：宽度 >= 768，且 长宽比 > 1.1（明显的横屏状态）才开启双排
-  const targetSpread = (w >= 768 && (w / h) >=1.25) ? 'auto' : 'none';
-  
-  // 只有在状态确实需要改变时，才触发 epub.js 重新排版
-  if (rendition.settings.spread !== targetSpread) {
-    rendition.spread(targetSpread);
-  }
-};
+const handleWindowResize = () => {
+  if (!rendition || !maskRef.value) return;
 
+  // 1. 瞬间黑屏：打断过渡，强刷重排，拉下遮罩，开启物理防误触
+  const mask = maskRef.value;
+  mask.style.transition = 'none';
+  mask.offsetHeight; // 🪄 强刷重排黑魔法
+  mask.style.opacity = '1';
+  mask.style.pointerEvents = 'auto';
+
+  // 2. 锁住雷达和菜单
+  if (!isJumpLocked) {
+    isJumpLocked = true;
+    selectionOverlayRef.value?.hideMenuOnly(); 
+  }
+  
+  clearTimeout(resizeTimer);
+  
+  // 3. 防抖执行重排与空降
+  resizeTimer = setTimeout(async () => {
+    try {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const targetSpread = (w >= 768 && (w / h) >= 1.25) ? 'auto' : 'none';
+      if (rendition.settings.spread !== targetSpread) rendition.spread(targetSpread);
+
+      rendition.resize();
+
+      if (unitMap.length > 0 && currentPage.value !== '-') {
+        const targetUnit = parseInt(currentPage.value);
+        const mapItem = unitMap.find(m => targetUnit >= m.start && targetUnit <= m.end);
+        await rendition.display(mapItem ? `${mapItem.href}#unit-${targetUnit}` : undefined);
+      } else {
+        await rendition.display(); 
+      }
+    } catch (e) {
+      console.warn("Resize error:", e);
+    } finally {
+      // 4. 揭开遮罩：等下一帧 -> 等100ms绘制 -> 恢复动画 -> 揭开黑幕 -> 解锁雷达
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          mask.style.transition = 'opacity 0.3s ease';
+          mask.style.opacity = '0';
+          mask.style.pointerEvents = 'none';
+          
+          setTimeout(() => { isJumpLocked = false; }, 300);
+        }, 100); 
+      });
+    }
+  }, 600); 
+};
 onMounted(() => {
   initReader();
   // 监听屏幕旋转或窗口大小调整
-  window.addEventListener('resize', updateLayoutMode);
+  window.addEventListener('resize', handleWindowResize);
 });
 
 onUnmounted(() => {
-  window.removeEventListener('resize', updateLayoutMode); // 打扫战场，移除监听
+  window.removeEventListener('resize', handleWindowResize); // 打扫战场，移除监听
   if (epubBook) {
     epubBook.destroy(); // 销毁实例，释放内存 [cite: 2]
   }
@@ -762,6 +800,16 @@ const jumpToNextChapter = async () => {
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+.mask {
+  position: fixed;
+  inset: 0;
+  background-color: #000000;
+  z-index: 9999;
+  opacity: 0;
+  pointer-events: none; /* 默认状态下允许点击穿透 */
+  transition: opacity 0.3s ease; /* 默认带有淡出动画 */
 }
 
 .scrollbar-hide::-webkit-scrollbar {
