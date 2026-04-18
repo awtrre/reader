@@ -349,7 +349,7 @@ const initReader = async () => {
     // 同步 UI 状态
     currentPage.value = initialPageNumber;
     inputPage.value = initialPageNumber;
-    totalPages.value = props.book.total_units || '-';
+totalPages.value = props.book.total_units ? props.book.total_units - 1 : '-';
 
     // 执行展示
     await rendition.display(targetLocation || undefined);
@@ -379,7 +379,7 @@ const initReader = async () => {
         if (foundElement) {
           const preciseId = foundElement.id; 
           const unitMatch = preciseId.match(/unit-(\d+)/);
-          const total = props.book.total_units || 1; 
+          const total = props.book.total_units ? props.book.total_units - 1 : 1;
 
           if (unitMatch) {
             const currentUnit = parseInt(unitMatch[1]);
@@ -477,7 +477,15 @@ const setupIframeClick = () => {
     clearTimeout(tapActionTimer);
     tapActionTimer = setTimeout(() => {
       const screenWidth = window.innerWidth;
-      const realX = endX % screenWidth; 
+      
+      // 🐛 核心修复：获取 Epub.js 内部包含列间距的真实排版跨度 (delta)
+      // 如果获取不到，则安全降级为物理屏幕宽度
+      const layoutDelta = rendition?.manager?.layout?.delta || screenWidth;
+      
+      // 用真实的 delta 来取余，完美抹平 WebKit 累加坐标 Bug 带来的漂移
+      const realX = endX % layoutDelta; 
+      
+      // 交互区域的判定，依然基于用户看到的物理屏幕宽度比例
       if (realX < screenWidth * 0.3) {
         rendition.prev();
       } else if (realX > screenWidth * 0.7) {
@@ -485,7 +493,7 @@ const setupIframeClick = () => {
       } else {
         showBars.value = !showBars.value; 
       }
-    }, 80); 
+    }, 80);
   };
 
   rendition.on('mousedown', recordStart);
@@ -558,7 +566,7 @@ const handleRelocated = (location) => {
         const currentUnit = parseInt(unitMatch[1]);
         currentPage.value = currentUnit;
         inputPage.value = currentUnit;
-        saveProgressToBackend(found.id, currentUnit / (props.book.total_units || 1));
+        saveProgressToBackend(found.id, currentUnit / (props.book.total_units ? props.book.total_units - 1 : 1));
       }
     }
   } catch (e) { console.error("Radar Error", e); }
