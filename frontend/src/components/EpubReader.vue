@@ -476,19 +476,22 @@ const setupIframeClick = () => {
     // 终点：执行翻页
     clearTimeout(tapActionTimer);
     tapActionTimer = setTimeout(() => {
+      // 1. 获取硬件级别的物理屏幕 X 坐标 (无视任何网页排版和滚动)
+      const physicalX = event.screenX; 
+      
+      // 2. 获取浏览器窗口在屏幕上的左边缘绝对位置 (兼顾电脑端非全屏的窗口模式)
+      const browserX = window.screenX || window.screenLeft || 0; 
+      
+      // 3. 算出手指在当前浏览器窗口内的【绝对横坐标】
+      const absoluteX = physicalX - browserX; 
+      
+      // 4. 获取窗口总宽度
       const screenWidth = window.innerWidth;
       
-      // 🐛 核心修复：获取 Epub.js 内部包含列间距的真实排版跨度 (delta)
-      // 如果获取不到，则安全降级为物理屏幕宽度
-      const layoutDelta = rendition?.manager?.layout?.delta || screenWidth;
-      
-      // 用真实的 delta 来取余，完美抹平 WebKit 累加坐标 Bug 带来的漂移
-      const realX = endX % layoutDelta; 
-      
-      // 交互区域的判定，依然基于用户看到的物理屏幕宽度比例
-      if (realX < screenWidth * 0.3) {
+      // 5. 按照绝对的三等分区域进行判断，彻底打通任督二脉！
+      if (absoluteX < screenWidth * 0.3) {
         rendition.prev();
-      } else if (realX > screenWidth * 0.7) {
+      } else if (absoluteX > screenWidth * 0.7) {
         rendition.next();
       } else {
         showBars.value = !showBars.value; 
