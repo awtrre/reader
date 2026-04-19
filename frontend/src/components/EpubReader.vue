@@ -10,6 +10,7 @@
         ref="selectionOverlayRef" 
         v-if="rendition" 
         :rendition="rendition" 
+        :book_id="props.book.id"
         @cancel-tap="clearTapTimer"
       />
 
@@ -393,6 +394,8 @@ totalPages.value = props.book.total_units ? props.book.total_units - 1 : '-';
     await rendition.display(targetLocation || undefined);
     if (viewer.value) viewer.value.classList.add('animate-fade-in');
     
+    loadSavedAnnotations(props.book.id, rendition);
+    
     // 延迟 500ms 激活雷达，防止初始化时的虚假跳转触发重复保存
     setTimeout(() => { isReadyToSave = true; }, 500);
 
@@ -588,6 +591,45 @@ const jumpToCfiAndClose = (cfiOrHref) => {
 // ==========================================
 // 3. 选词高亮与维基反代加载
 // ==========================================
+const loadSavedAnnotations = async (bookId, rendition) => {
+  try {
+    const res = await fetch(`/api/books/${bookId}/annotations`, {
+      headers: {
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      }
+    });
+    const data = await res.json();
+    if (data.status === 'success') {
+      const contents = rendition.getContents()[0];
+      if (!contents) return;
+
+      data.annotations.forEach(anno => {
+        try {
+          // 逆向还原：通过 segments 找到 DOM 节点，转回 CFI 给 epub.js 渲染
+          const range = contents.document.createRange();
+          const startNode = contents.document.getElementById(anno.segments[0].nodeX);
+          const endNode = contents.document.getElementById(anno.segments[anno.segments.length - 1].nodeX);
+          
+          if (startNode && endNode) {
+            // 这里的定位逻辑完全对应你后端存的 node1 10-20 结构 [cite: 4]
+            range.setStart(startNode.firstChild || startNode, anno.segments[0].startOffset);
+            range.setEnd(endNode.firstChild || endNode, anno.segments[anno.segments.length - 1].endOffset);
+            
+            const cfi = contents.cfiFromRange(range);
+            
+            // 将数据同步到 SelectionOverlay 的内部 Map 中，保证长按能弹出删除/详情
+            selectionOverlayRef.value?.injectExternalAnnotation(cfi, anno);
+          }
+        } catch (err) {
+          console.warn("还原划线失败:", err);
+        }
+      });
+    }
+  } catch (e) {
+    console.error("拉取批注失败", e);
+  }
+};
 
 const handleRelocated = (location) => {
   try {

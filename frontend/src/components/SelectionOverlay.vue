@@ -79,6 +79,10 @@ const props = defineProps({
   rendition: {
     type: Object,
     required: true
+  },
+  book_id: {          
+    type: String,
+    required: true
   }
 });
 
@@ -107,6 +111,7 @@ let pendingSelection = null;
 let overlappingCfi = null;
 let panelOpenTime = 0;
 let longPressTimer = null;
+let noteSaveTimer = null;
 
 const triggerTouchShield = () => {
   isGlobalShieldActive.value = true;
@@ -445,14 +450,11 @@ const processSelection = (cfiRange, text, range, contents, isPointerDownFlag) =>
     currentSelection.value = selectionData;
 
     // ✨ 狸猫换太子：绘制“临时高亮”底色
-    if (!isSelectionOverlapping.value) {
-      props.rendition.annotations.add(
-        'highlight', cfiRange, {}, null, 'temp-hl', 
-        // 🎨 核心修复：使用半透明纯白，告别脏灰块
-        { "fill": "#ffffff", "fill-opacity": "0.15" } 
-      );
-      tempHighlightCfi.value = cfiRange;
-    }
+    props.rendition.annotations.add(
+      'highlight', cfiRange, {}, null, 'temp-hl', 
+      { "fill": "#ffffff", "fill-opacity": "0.15" } 
+    );
+    tempHighlightCfi.value = cfiRange;
 
     // 瞬间清空原生选区（蓝条）
     contents.window.getSelection().removeAllRanges();
@@ -475,13 +477,11 @@ const showPendingMenu = () => {
     currentSelection.value = { ...pendingSelection };
     
     // ✨ 拖拽结束释放选区时的狸猫换太子
-    if (!isSelectionOverlapping.value) {
-      props.rendition.annotations.add(
-        'highlight', pendingSelection.cfi, {}, null, 'temp-hl', 
-        { "fill": "#525252", "fill-opacity": "0.4" } 
-      );
-      tempHighlightCfi.value = pendingSelection.cfi;
-    }
+    props.rendition.annotations.add(
+      'highlight', pendingSelection.cfi, {}, null, 'temp-hl', 
+      { "fill": "#525252", "fill-opacity": "0.4" } 
+    );
+    tempHighlightCfi.value = pendingSelection.cfi;
     clearNativeSelection(); // 强制逼退 iOS 菜单
 
     showSelectionMenu.value = true;
@@ -523,8 +523,26 @@ const closeAnnotationPanel = () => {
   clearTempHighlight();
 };
 
-const deleteOverlappingAnnotation = () => {
+const deleteOverlappingAnnotation = async () => {
   if (overlappingCfi) {
+    const data = annotationDataMap[overlappingCfi];
+    
+    // 1. 告知后端抹除岁月痕迹
+    try {
+      await fetch(`/api/books/${props.book_id}/annotations/delete`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'user-token': localStorage.getItem('geek_token') || '',
+          'guest-uuid': localStorage.getItem('guest_uuid') || ''
+        },
+        body: JSON.stringify({ segments: data.segments, text: data.text })
+      });
+    } catch (e) { 
+      console.error("后端删除失败", e); 
+    }
+
+    // 2. 执行你原有的本地完美清理逻辑
     props.rendition.annotations.remove(overlappingCfi, 'highlight');
     delete annotationDataMap[overlappingCfi];
     
@@ -537,13 +555,44 @@ const deleteOverlappingAnnotation = () => {
     showAnnotationPanel.value = false; 
     showWiki.value = false;
     clearNativeSelection(); 
+    clearTempHighlight(); // 清理覆盖在上面的临时半透明高亮
   }
 };
 
 const syncNote = () => {
-  if (!isSelectionOverlapping.value) markAnnotation(); 
+  // 如果是全新的划线（还没保存过），直接走 markAnnotation 的全套逻辑
+  if (!isSelectionOverlapping.value) {
+    markAnnotation();
+    return;
+  }
+  
   if (overlappingCfi && annotationDataMap[overlappingCfi]) {
+    // 1. 更新本地缓存（保证前端 UI 不卡顿）
     annotationDataMap[overlappingCfi].note = currentNoteText.value;
+    
+    // 2. ✨ 新增：静默同步到后端（停止打字 800ms 后自动触发更新）
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = setTimeout(async () => {
+      const payload = {
+        text: annotationDataMap[overlappingCfi].text,
+        segments: annotationDataMap[overlappingCfi].segments,
+        note: currentNoteText.value // 把最新的文字发过去
+      };
+      
+      try {
+        await fetch(`/api/books/${props.book_id}/annotations`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'user-token': localStorage.getItem('geek_token') || '',
+            'guest-uuid': localStorage.getItem('guest_uuid') || ''
+          },
+          body: JSON.stringify(payload)
+        });
+      } catch (e) {
+        console.error("批注静默保存失败", e);
+      }
+    }, 800);
   }
 };
 
@@ -574,14 +623,36 @@ const switchToAnnotation = () => {
   showAnnotationPanel.value = true;
 };
 
-const markAnnotation = () => {
+const markAnnotation = async () => {
   triggerTouchShield();
   const cfi = currentSelection.value.cfi;
   
-  // 清除刚才画的临时半透明高亮
+  // 1. 清除刚才画的临时半透明高亮
   clearTempHighlight();
   
-  // 保存数据字典
+  // 2. 组装发给后端的结构化数据
+  const payload = {
+    text: currentSelection.value.text,
+    segments: currentSelection.value.segments, 
+    note: currentNoteText.value 
+  };
+
+  // 3. 异步发送给后端持久化 (不会阻塞 UI 渲染)
+  try {
+    await fetch(`/api/books/${props.book_id}/annotations`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    console.error("同步至后端失败", e);
+  }
+
+  // 4. 保存到本地数据字典，供后续点击查看/删除时使用
   if (!annotationDataMap[cfi]) {
     annotationDataMap[cfi] = {
       text: currentSelection.value.text,
@@ -596,7 +667,7 @@ const markAnnotation = () => {
   overlappingCfi = cfi;
   activeHighlightCfi.value = cfi;
 
-  // 绘制最终高亮块
+  // 5. 绘制最终高亮块 (纯净半透明白色)
   props.rendition.annotations.add(
     'highlight', cfi, {}, 
     (e) => {
@@ -620,13 +691,11 @@ const markAnnotation = () => {
       panelOpenTime = Date.now();
     }, 
     'custom-hl', 
-    // 🎨 核心修复：同样使用纯净的半透明白色，稍微亮一点代表已确认（去掉 multiply）
     { "fill": "#ffffff", "fill-opacity": "0.22" } 
   );
   
+  // 6. 收尾清理
   showSelectionMenu.value = false; 
-  
-  // 🔒 核心修复：清理原生选区，且这个函数内部自带 setSelectionLayerActive(false) 封印功能
   clearNativeSelection(); 
 };
 
@@ -644,6 +713,46 @@ const summonReference = async (query) => {
   }, 800);
 };
 
+const injectExternalAnnotation = (cfi, annoData) => {
+  // 1. 存入本地 Map 供交互使用
+  annotationDataMap[cfi] = {
+    text: annoData.text,
+    segments: annoData.segments,
+    note: annoData.note
+  };
+
+  // 2. 在阅读器上画出高亮块，并绑定点击拦截逻辑
+  props.rendition.annotations.add(
+    'highlight', 
+    cfi, 
+    {}, 
+    (e) => {
+      // 这是点击已存在的高亮块时触发的事件
+      triggerTouchShield();
+      const contents = props.rendition.getContents()[0];
+      const selection = contents ? contents.window.getSelection() : null;
+      if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) return;
+
+      emit('cancel-tap'); // 通知父级掐断翻页定时器
+      
+      isSelectionOverlapping.value = true;
+      overlappingCfi = cfi;
+      activeHighlightCfi.value = cfi;
+      currentSelection.value = { 
+        text: annotationDataMap[cfi].text, 
+        cfi: cfi, 
+        segments: annotationDataMap[cfi].segments
+      };
+
+      currentNoteText.value = annotationDataMap[cfi].note || '';     
+      showAnnotationPanel.value = true;
+      panelOpenTime = Date.now();
+    }, 
+    'custom-hl', 
+    { "fill": "#ffffff", "fill-opacity": "0.22" } 
+  );
+};
+
 // 暴露供父组件调用的武器库
 defineExpose({
   processSelection,
@@ -654,7 +763,8 @@ defineExpose({
   processPointerDown,
   processPointerUp,
   clearNativeSelection,
-  setSelectionLayerActive
+  setSelectionLayerActive,
+  injectExternalAnnotation 
 });
 </script>
 
