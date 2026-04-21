@@ -588,32 +588,15 @@ const closeAnnotationPanel = () => {
   currentNoteText.value = '';
 };
 
-const deleteOverlappingAnnotation = async () => {
+const deleteOverlappingAnnotation = () => {
   if (overlappingCfi) {
     const data = annotationDataMap[overlappingCfi];
     rawAnnotationsCache = rawAnnotationsCache.filter(
       anno => JSON.stringify(anno.segments) !== JSON.stringify(data.segments)
     );
-    
-    // 1. 告知后端抹除岁月痕迹
-    try {
-      await fetch(`/api/books/${props.book_id}/annotations/delete`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'user-token': localStorage.getItem('geek_token') || '',
-          'guest-uuid': localStorage.getItem('guest_uuid') || ''
-        },
-        body: JSON.stringify({ segments: data.segments, text: data.text })
-      });
-    } catch (e) { 
-      console.error("后端删除失败", e); 
-    }
-
-    // 2. 执行你原有的本地完美清理逻辑
+    // 👉 核心修改 1：先把本地清理逻辑放到前面，瞬间让高亮和菜单消失！
     props.rendition.annotations.remove(overlappingCfi, 'highlight');
     delete annotationDataMap[overlappingCfi];
-    
     isSelectionOverlapping.value = false;
     overlappingCfi = null;
     activeHighlightCfi.value = null; 
@@ -623,7 +606,19 @@ const deleteOverlappingAnnotation = async () => {
     showAnnotationPanel.value = false; 
     showWiki.value = false;
     clearNativeSelection(); 
-    clearTempHighlight(); // 清理覆盖在上面的临时半透明高亮
+    clearTempHighlight();
+    // 👉 核心修改 2：把 fetch 放到最后默默执行，去掉 await
+    fetch(`/api/books/${props.book_id}/annotations/delete`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      },
+      body: JSON.stringify({ segments: data.segments, text: data.text })
+    }).catch(e => {
+      console.error("后端删除失败", e); 
+    });
   }
 };
 
@@ -698,39 +693,23 @@ const switchToAnnotation = () => {
   showAnnotationPanel.value = true;
 };
 
-const markAnnotation = async () => {
+const markAnnotation = () => {
   triggerTouchShield();
   const cfi = currentSelection.value.cfi;
   
-  // 1. 清除刚才画的临时半透明高亮
   clearTempHighlight();
   if (!showAnnotationPanel.value) {
     currentNoteText.value = '';
   }
   
-  // 2. 组装发给后端的结构化数据
   const payload = {
     text: currentSelection.value.text,
     segments: currentSelection.value.segments, 
     note: currentNoteText.value 
   };
   rawAnnotationsCache.push(payload);
-  // 3. 异步发送给后端持久化 (不会阻塞 UI 渲染)
-  try {
-    await fetch(`/api/books/${props.book_id}/annotations`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'user-token': localStorage.getItem('geek_token') || '',
-        'guest-uuid': localStorage.getItem('guest_uuid') || ''
-      },
-      body: JSON.stringify(payload)
-    });
-  } catch (e) {
-    console.error("同步至后端失败", e);
-  }
 
-  // 4. 保存到本地数据字典，供后续点击查看/删除时使用
+  // 👉 核心修改 1：立刻更新本地数据，供后续交互使用
   if (!annotationDataMap[cfi]) {
     annotationDataMap[cfi] = {
       text: currentSelection.value.text,
@@ -745,17 +724,16 @@ const markAnnotation = async () => {
   overlappingCfi = cfi;
   activeHighlightCfi.value = cfi;
 
-  // 5. 绘制最终高亮块 (纯净半透明白色)
+  // 👉 核心修改 2：立刻在阅读器上画出最终高亮块，不让用户等！
   props.rendition.annotations.add(
     'highlight', cfi, {}, 
     (e) => {
-      // 这是点击已存在的高亮块时触发的事件
       triggerTouchShield();
       const contents = props.rendition.getContents()[0];
       const selection = contents ? contents.window.getSelection() : null;
       if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) return;
 
-      emit('cancel-tap'); // 通知父级掐断翻页定时器
+      emit('cancel-tap'); 
       
       isSelectionOverlapping.value = true;
       overlappingCfi = cfi;
@@ -772,9 +750,21 @@ const markAnnotation = async () => {
     { "fill": "#ffffff", "fill-opacity": "0.22" } 
   );
   
-  // 6. 收尾清理
   showSelectionMenu.value = false; 
   clearNativeSelection(); 
+
+  // 👉 核心修改 3：最后再把请求扔给后端持久化，去掉 await
+  fetch(`/api/books/${props.book_id}/annotations`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'user-token': localStorage.getItem('geek_token') || '',
+      'guest-uuid': localStorage.getItem('guest_uuid') || ''
+    },
+    body: JSON.stringify(payload)
+  }).catch(e => {
+    console.error("同步至后端失败", e);
+  });
 };
 
 const summonReference = async (query) => {
