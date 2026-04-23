@@ -636,9 +636,33 @@ const openTocOverlay = () => {
 };
 
 const jumpToCfiAndClose = async (cfiOrHref) => {
-  // 修改为：
-  await preciseDisplay(cfiOrHref);
+  showBars.value = false;
   showTocOverlay.value = false;
+
+  let target = cfiOrHref;
+  let hashId = null;
+
+  // 1. 拆解并解码真正的 DOM ID
+  if (typeof target === 'string' && target.includes('#')) {
+    const [base, hash] = target.split('#');
+    hashId = decodeURIComponent(hash);
+    target = `${base}#${hashId}`;
+  }
+
+  // 2. 加载物理文件（await 保证 iframe 的 DOM 树绝对加载完毕）
+  await rendition.display(target);
+
+  if (!hashId) return;
+
+  // 3. 提取目标节点，直接生成 CFI 结构坐标并无缝空降！
+  const contents = rendition.getContents()[0];
+  if (contents) {
+    const targetNode = contents.document.getElementById(hashId);
+    if (targetNode) {
+      const preciseCfi = contents.cfiFromNode(targetNode);
+      rendition.display(preciseCfi);
+    }
+  }
 };
 
 // ==========================================
