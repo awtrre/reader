@@ -636,32 +636,65 @@ const openTocOverlay = () => {
 };
 
 const jumpToCfiAndClose = async (cfiOrHref) => {
+  // 1. 关闭所有 UI 面板
   showBars.value = false;
   showTocOverlay.value = false;
 
-  let target = cfiOrHref;
-  let hashId = null;
-
-  // 1. 拆解并解码真正的 DOM ID
-  if (typeof target === 'string' && target.includes('#')) {
-    const [base, hash] = target.split('#');
-    hashId = decodeURIComponent(hash);
-    target = `${base}#${hashId}`;
+  // 2. 借用黑幕逻辑：瞬间拉下遮罩，进入隐身状态，同时锁住雷达
+  const mask = maskRef.value;
+  if (mask) {
+    mask.style.transition = 'none';
+    mask.offsetHeight; // 🪄 强刷重排黑魔法
+    mask.style.opacity = '1';
+    mask.style.pointerEvents = 'auto';
   }
+  isJumpLocked = true; // 锁住滚动雷达，防止后台跳转时乱存进度
 
-  // 2. 加载物理文件（await 保证 iframe 的 DOM 树绝对加载完毕）
-  await rendition.display(target);
+  try {
+    let target = cfiOrHref;
+    let hashId = null;
 
-  if (!hashId) return;
-
-  // 3. 提取目标节点，直接生成 CFI 结构坐标并无缝空降！
-  const contents = rendition.getContents()[0];
-  if (contents) {
-    const targetNode = contents.document.getElementById(hashId);
-    if (targetNode) {
-      const preciseCfi = contents.cfiFromNode(targetNode);
-      rendition.display(preciseCfi);
+    // 解析真正的 DOM ID
+    if (typeof target === 'string' && target.includes('#')) {
+      const [base, hash] = target.split('#');
+      hashId = decodeURIComponent(hash);
+      target = `${base}#${hashId}`;
     }
+
+    // 第一次跳转：加载物理文件（此时被黑幕挡住，用户看不见排版和闪烁）
+    await rendition.display(target);
+
+    // 如果有具体的段落锚点，执行第二次精确空降
+    if (hashId) {
+      // 极其关键的 50ms：确保 iframe 彻底挂载并且浏览器有时间生成目标节点
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      const contents = rendition.getContents()[0];
+      if (contents) {
+        const targetNode = contents.document.getElementById(hashId);
+        if (targetNode) {
+          const preciseCfi = contents.cfiFromNode(targetNode);
+          await rendition.display(preciseCfi); // 第二次绝对精确定位
+        }
+      }
+    }
+  } catch (error) {
+    console.error("跳转失败:", error);
+  } finally {
+    // 3. 揭开黑幕：加快节奏
+    requestAnimationFrame(() => {
+      // 延迟从 100ms 极限压缩到 30ms（只留够浏览器把最新 DOM 喷绘到屏幕上的时间）
+      setTimeout(() => {
+        if (mask) {
+          // 动画过渡从 0.3s 砍半到 0.15s，视觉上会非常干脆
+          mask.style.transition = 'opacity 0.15s ease';
+          mask.style.opacity = '0';
+          mask.style.pointerEvents = 'none';
+        }
+        // 动画结束（150ms）后立马解锁进度雷达
+        setTimeout(() => { isJumpLocked = false; }, 150);
+      }, 30); 
+    });
   }
 };
 
