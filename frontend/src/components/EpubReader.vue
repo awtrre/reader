@@ -65,7 +65,7 @@
           ✕ EXIT
         </button>
         <div class="flex gap-8 text-sm font-bold tracking-widest">
-          <button @click="activeOverlayTab = 'toc'" :class="activeOverlayTab === 'toc' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">目录</button>
+          <button @click="switchToTocTab" :class="activeOverlayTab === 'toc' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">目录</button>
           <button @click="activeOverlayTab = 'bookmarks'" :class="activeOverlayTab === 'bookmarks' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">书签</button>
           <button @click="loadAnnotationsTab" :class="activeOverlayTab === 'annotations' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">勾注</button>
         </div>
@@ -158,6 +158,7 @@ const backendApi = '/api';
 
 // --- 界面控制状态 ---
 const showBars = ref(false);
+let hasScrolledToActiveToc = false;
 const showTocOverlay = ref(false);
 const activeOverlayTab = ref('toc');
 const maskRef = ref(null);
@@ -648,6 +649,7 @@ const handleTouch = (event) => {
 };
 
 const openTocOverlay = async () => {
+  hasScrolledToActiveToc = false;
   showBars.value = false;
   showTocOverlay.value = true;
   if (activeOverlayTab.value === 'annotations') {
@@ -727,16 +729,19 @@ const openTocOverlay = async () => {
 
   // ✨ 利用 nextTick 等待 DOM 渲染出高亮标记后，执行瞬间滚动
   // ✨ 利用 nextTick 等待 DOM 渲染后，执行位置归位
+  // 原有的 openTocOverlay 底部的 nextTick
   import('vue').then(({ nextTick }) => {
     nextTick(() => {
       if (activeOverlayTab.value === 'toc') {
-        // 如果是目录页，去寻找高亮的章节并滚动到中间
-        const activeEl = document.getElementById('active-toc-item');
-        if (activeEl) {
-          activeEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+        // ✨ 新增判断：如果还没滚动过，才执行滚动
+        if (!hasScrolledToActiveToc) {
+          const activeEl = document.getElementById('active-toc-item');
+          if (activeEl) {
+            activeEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+            hasScrolledToActiveToc = true; // ✨ 滚动完立马锁上
+          }
         }
       } else {
-        // ✨ 核心修复：如果是勾注或书签页，强制把共用的滚动容器拉回最顶部！
         const scrollBox = document.querySelector('.overflow-y-auto');
         if (scrollBox) scrollBox.scrollTop = 0;
       }
@@ -838,6 +843,23 @@ const loadAnnotationsTab = async () => {
   } catch (e) {
     console.warn("勾注数据拉取失败，尝试读取本地缓存", e);
     // 可选：如果断网，可以在这里降级读取 localStorage 的数据
+  }
+};
+
+const switchToTocTab = () => {
+  activeOverlayTab.value = 'toc';
+  
+  // ✨ 新增判断：只有在没被滚动过的情况下，才去执行寻址和滚动
+  if (!hasScrolledToActiveToc) {
+    import('vue').then(({ nextTick }) => {
+      nextTick(() => {
+        const activeEl = document.getElementById('active-toc-item');
+        if (activeEl) {
+          activeEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+          hasScrolledToActiveToc = true; // ✨ 滚动完立马锁上
+        }
+      });
+    });
   }
 };
 
