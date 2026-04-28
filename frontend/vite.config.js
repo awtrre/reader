@@ -31,4 +31,28 @@ export default defineConfig({
       }
     })
   ],
+  build: {
+    chunkSizeWarningLimit: 1500, 
+    
+    rollupOptions: {
+      output: {
+        // 2. 核心优化：手动拆分代码块 (manualChunks)
+        manualChunks(id) {
+          // 只要是 node_modules 里的第三方依赖，就进行处理
+          if (id.includes('node_modules')) {
+            // 特别关照电子书引擎：把 epubjs 独立打包成一个文件，因为它的核心代码很大且极少变动
+            if (id.includes('epubjs')) {
+              return 'epubjs-core';
+            }
+            // 特别关照 Vue 核心库
+            if (id.includes('vue')) {
+              return 'vue-core';
+            }
+            // 剩下的所有第三方杂项（比如 Tailwind 工具等），统统塞进 vendor 里
+            return 'vendor';
+          }
+        }
+      }
+    }
+  }
 })

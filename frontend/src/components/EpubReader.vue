@@ -66,26 +66,55 @@
         </button>
         <div class="flex gap-8 text-sm font-bold tracking-widest">
           <button @click="activeOverlayTab = 'toc'" :class="activeOverlayTab === 'toc' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">目录</button>
-          <button @click="activeOverlayTab = 'highlights'" :class="activeOverlayTab === 'highlights' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">勾画</button>
-          <button @click="activeOverlayTab = 'notes'" :class="activeOverlayTab === 'notes' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">批注</button>
+          <button @click="activeOverlayTab = 'bookmarks'" :class="activeOverlayTab === 'bookmarks' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">书签</button>
+          <button @click="loadAnnotationsTab" :class="activeOverlayTab === 'annotations' ? 'text-neutral-100 border-b-2 border-neutral-100' : 'text-neutral-600 hover:text-neutral-400'" class="pb-1 transition-all">勾注</button>
         </div>
         <div class="w-16"></div> 
       </div>
       
-      <div class="flex-1 overflow-y-auto p-8 max-w-3xl mx-auto w-full scrollbar-hide">
-        <ul v-if="activeOverlayTab === 'toc'" class="space-y-4">
-          <li v-for="item in tocList" :key="item.id" 
-              :id="item.isActive ? 'active-toc-item' : ''"
-              @click="jumpToCfiAndClose(item.href)" 
-              class="cursor-pointer border-b border-neutral-800 pb-2 transition-colors"
-              :class="item.isActive ? 'text-neutral-100 font-bold' : 'text-neutral-400 hover:text-neutral-100'">
-            {{ item.label }}
-          </li>
-        </ul>
-        <div v-else class="text-center text-neutral-600 mt-20 font-mono text-sm">
+    <div class="flex-1 overflow-hidden p-8 max-w-3xl mx-auto w-full">
+      
+      <ul v-show="activeOverlayTab === 'toc'" class="h-full overflow-y-auto scrollbar-hide pr-2">
+        <li v-for="item in tocList" :key="item.id" 
+            :id="item.isActive ? 'active-toc-item' : ''"
+            @click="jumpToCfiAndClose(item.href)" 
+            class="cursor-pointer border-b border-neutral-800 transition-colors hover:bg-neutral-800/50 py-4 px-3"
+            :class="item.isActive ? 'text-neutral-100 font-bold' : 'text-neutral-400 hover:text-neutral-100'">
+          {{ item.label }}
+        </li>
+      </ul>
+
+      <ul v-show="activeOverlayTab === 'bookmarks'" class="h-full overflow-y-auto scrollbar-hide pr-2">
+        <div class="text-center text-neutral-600 mt-20 font-mono text-sm">
           No data recorded yet.
         </div>
-      </div>
+      </ul>
+
+      <ul v-show="activeOverlayTab === 'annotations'" class="h-full overflow-y-auto scrollbar-hide pr-2">
+        <li v-for="anno in annotationsList" :key="anno.id" 
+            @click="jumpToAnnotationPage(anno)" 
+            class="cursor-pointer border-b border-neutral-800 py-4 px-3 transition-colors hover:bg-neutral-800/50 group">
+          
+          <div class="border-l-2 border-neutral-600 pl-3 group-hover:border-neutral-400 transition-colors">
+            
+            <div class="text-neutral-200 text-sm line-clamp-2 group-hover:text-white transition-colors">
+              {{ anno.text }}
+            </div>
+            
+            <div v-if="anno.note" class="text-neutral-400 text-xs line-clamp-2 mt-2">
+              {{ anno.note }}
+            </div>
+            
+          </div>
+
+          <div class="text-[10px] text-neutral-600 mt-2 text-right font-mono">
+            {{ new Date(anno.created_at).toLocaleDateString() }}
+          </div>
+          
+        </li>
+      </ul>
+
+    </div>
     </div>
 
     <audio ref="ttsPlayer" @ended="handleAudioEnded" @error="handleAudioError" class="hidden"></audio>
@@ -139,6 +168,7 @@ const currentPage = ref('-');
 const totalPages = ref('-');
 const inputPage = ref('-');
 const currentFontSize = ref(100);
+const annotationsList = ref([]);
 let isJumpLocked = false;
 let resizeTimer = null;
 
@@ -620,6 +650,9 @@ const handleTouch = (event) => {
 const openTocOverlay = async () => {
   showBars.value = false;
   showTocOverlay.value = true;
+  if (activeOverlayTab.value === 'annotations') {
+    loadAnnotationsTab();
+  }
 
   const nav = await epubBook.loaded.navigation;
   const location = rendition.currentLocation();
@@ -693,12 +726,19 @@ const openTocOverlay = async () => {
   tocList.value = flatList;
 
   // ✨ 利用 nextTick 等待 DOM 渲染出高亮标记后，执行瞬间滚动
+  // ✨ 利用 nextTick 等待 DOM 渲染后，执行位置归位
   import('vue').then(({ nextTick }) => {
     nextTick(() => {
-      const activeEl = document.getElementById('active-toc-item');
-      if (activeEl) {
-        // block: 'start' 会让这个元素刚好贴齐滚动容器的顶部
-        activeEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+      if (activeOverlayTab.value === 'toc') {
+        // 如果是目录页，去寻找高亮的章节并滚动到中间
+        const activeEl = document.getElementById('active-toc-item');
+        if (activeEl) {
+          activeEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+        }
+      } else {
+        // ✨ 核心修复：如果是勾注或书签页，强制把共用的滚动容器拉回最顶部！
+        const scrollBox = document.querySelector('.overflow-y-auto');
+        if (scrollBox) scrollBox.scrollTop = 0;
       }
     });
   });
@@ -770,6 +810,73 @@ const jumpToCfiAndClose = async (cfiOrHref) => {
   }
 };
 
+const loadAnnotationsTab = async () => {
+  activeOverlayTab.value = 'annotations';
+  import('vue').then(({ nextTick }) => {
+    nextTick(() => {
+      const scrollBox = document.querySelector('.overflow-y-auto');
+      if (scrollBox) scrollBox.scrollTop = 0;
+    });
+  });
+  try {
+    // 假设你的后端按这个规范返回该书的所有勾画和批注
+    const res = await fetch(`/api/books/${props.book.id}/annotations`, {
+      headers: {
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      }
+    });
+    
+    if (res.ok) {
+      const resData = await res.json();
+      if (resData.annotations && Array.isArray(resData.annotations)) {
+        annotationsList.value = resData.annotations.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      } else {
+        annotationsList.value = [];
+      }
+    }
+  } catch (e) {
+    console.warn("勾注数据拉取失败，尝试读取本地缓存", e);
+    // 可选：如果断网，可以在这里降级读取 localStorage 的数据
+  }
+};
+
+// 点击一条勾注时触发
+const jumpToAnnotationPage = (anno) => {
+  let targetUnit = null;
+
+  // 1. 强力解包：对准后端的 nodeX 字段提取
+  if (anno.segments) {
+    try {
+      const parsedSegments = typeof anno.segments === 'string' ? JSON.parse(anno.segments) : anno.segments;
+      
+      // 检查数组并且拿到第一个选中片段
+      if (Array.isArray(parsedSegments) && parsedSegments.length > 0) {
+        const firstSegment = parsedSegments[0];
+        
+        // 关键修复：你的后端定义的键名是 nodeX，值类似 "unit-123"
+        if (firstSegment && firstSegment.nodeX) {
+          const match = firstSegment.nodeX.match(/unit-(\d+)/);
+          if (match) {
+            targetUnit = match[1];
+          }
+        }
+      }
+    } catch (e) {
+      console.error("解析勾注数据失败:", e);
+    }
+  }
+
+  // 2. 核心闭环：走极客空降法
+  if (targetUnit !== null) {
+    inputPage.value = parseInt(targetUnit, 10);
+    jumpToTargetPage(); 
+    showTocOverlay.value = false;
+  } else {
+    // 如果点不动，能在控制台清晰看到到底传来了什么畸形数据
+    console.warn("未能提取到页码，跳转失败！当前的数据是:", anno.segments);
+  }
+};
 // ==========================================
 // 3. 选词高亮与维基反代加载
 // ==========================================

@@ -573,7 +573,7 @@ async def get_annotations(book_id: str, user_token: Optional[str] = Header(None)
         user_id = await get_current_user_id(db, user_token, guest_uuid)
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, segments, selected_text, note FROM annotations WHERE user_id = ? AND book_id = ?",
+            "SELECT id, segments, selected_text, note, created_at FROM annotations WHERE user_id = ? AND book_id = ?",
             (user_id, book_id)
         )
         rows = await cursor.fetchall()
@@ -584,7 +584,8 @@ async def get_annotations(book_id: str, user_token: Optional[str] = Header(None)
                 "id": row["id"],
                 "segments": json.loads(row["segments"]),
                 "text": row["selected_text"],
-                "note": row["note"]
+                "note": row["note"],
+                "created_at": row["created_at"]  # ✨ 2. 把时间戳一起装包发给前端
             })
         return {"status": "success", "annotations": result}
 
