@@ -356,7 +356,6 @@ onUnmounted(() => {
   textNodes = [];
 });
 
-// ✨ 核心修复：带 CSS 渲染缓冲的安全跳转包装器
 const preciseDisplay = async (targetLocation) => {
   // 如果是空降，或者不带锚点的纯章节跳转，直接放行
   if (!targetLocation || typeof targetLocation !== 'string' || !targetLocation.includes('#')) {
@@ -366,12 +365,13 @@ const preciseDisplay = async (targetLocation) => {
   // 👇 如果是跨章跳跃到特定节点（href#unit-X 格式）
   const [baseHref, anchorId] = targetLocation.split('#');
   
-  // 1. 先只加载章节的基础路径。这会强迫 epub.js 创建 iframe 并注入 applyTheme 的样式
+  // 1. 先只加载章节的基础路径。这会强迫 epub.js 创建 iframe 并触发所有拦截钩子
   await rendition.display(baseHref);
   
-  // 2. 命脉所在：强制等待 50 毫秒！
-  // 给浏览器渲染引擎留出一丁点时间，让它把你的 line-height 和 margin 彻底应用并固化排版
-  await new Promise(resolve => setTimeout(resolve, 50));
+  // 2. 命脉所在：干掉 setTimeout，使用事件驱动的 waitForPaint！
+  // 等待浏览器完成当前帧的布局计算（Reflow）和重绘（Repaint），
+  // 彻底让树莓派的渲染速度来主导节奏，无论多卡都能保证排版固化。
+  await waitForPaint();
   
   // 3. 此时排版已是最终形态，再次执行带节点的精准空降，百发百中！
   return rendition.display(targetLocation);
@@ -528,15 +528,36 @@ const initReader = async () => {
     totalPages.value = props.book.total_units ? props.book.total_units - 1 : '-';
 
     await loadSavedAnnotations(props.book.id, rendition); // 先拿批注数据
-    await preciseDisplay(targetLocation || undefined);    // 使用安全空降！
+
+    // ✨ 核心修复：完全抄作业！把初次渲染封装成和跳页一样的异步大招
+    const performInitJumpAndRender = async () => {
+      await preciseDisplay(targetLocation || undefined);    // 1. 安全空降！
+      
+      // 2. 此时底层的 iframe 已经滚到了正确的那一页，立刻强制向 DOM 注入高亮
+      const finalContents = rendition.getContents()[0];
+      if (finalContents) {
+        selectionOverlayRef.value?.renderAnnotationsForCurrentChapter(finalContents);
+      }
+    };
+
+    // ✨ 护城河：让“初次高负载渲染”和“300ms 最短黑幕时间”一起跑！
+    // 彻底吃掉高亮节点注入引起的 DOM 抖动和 Vue 的异步延迟
+    await Promise.all([
+      performInitJumpAndRender(),
+      new Promise(resolve => setTimeout(resolve, 300)) 
+    ]);
+
+    // ✨ 绝对死等：确保 300ms 后，带高亮的最终完美排版已经被 GPU 画好
+    await waitForPaint();
     
-    // ✨ 3. 此时 DOM 已经带着高亮加载完毕，揭开帷幕！
+    // ✨ 此时揭开帷幕，文字和高亮必定是浑然一体的！
     requestAnimationFrame(() => {
       if (viewer.value) viewer.value.classList.add('animate-fade-in');
     });
     
-    // 4. 延迟 500ms 激活雷达，防止初始化时的虚假跳转触发重复保存
-    setTimeout(() => { isReadyToSave = true; }, 500);
+    // ✨ 动画开始后，等待内部引擎平稳，再激活雷达
+    await waitForPaint();
+    isReadyToSave = true;
 
     // 6. 进度雷达：监听翻页并寻找 unit-X 锚点 [cite: 2]
     rendition.on('relocated', (location) => {
@@ -833,7 +854,7 @@ const jumpToCfiAndClose = async (cfiOrHref) => {
     const performJumpAndRender = async () => {
       await rendition.display(target);
       if (hashId) {
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await waitForPaint();
         const contents = rendition.getContents()[0];
         if (contents) {
           const targetNode = contents.document.getElementById(hashId);
@@ -864,7 +885,7 @@ const jumpToCfiAndClose = async (cfiOrHref) => {
   } catch (error) {
     console.error("跳转失败:", error);
   } finally {
-    // 5. 缓慢揭开黑幕 (对齐 jumpToTargetPage 的 0.2s 动画)
+    // 5. 缓慢揭开黑幕
     if (mask) {
       mask.style.transition = 'opacity 0.2s ease';
       mask.style.opacity = '0';
@@ -1105,7 +1126,7 @@ const jumpToTargetPage = async () => {
   if (!mapItem) return;
   
   const preciseId = `unit-${targetUnit}`; 
-  saveProgressToBackend(preciseId, targetUnit / total); 
+  saveProgressToBackend(preciseId, targetUnit / total, true);
   currentPage.value = targetUnit;
   isJumpLocked = true;
   
