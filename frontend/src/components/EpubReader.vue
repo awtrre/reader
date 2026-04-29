@@ -318,10 +318,42 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleWindowResize); // 打扫战场，移除监听
-  if (epubBook) {
-    epubBook.destroy(); // 销毁实例，释放内存 [cite: 2]
+  // 1. 移除全局 Window 监听器
+  window.removeEventListener('resize', handleWindowResize); 
+
+  // 2. 🛑 掐断所有异步定时器，防止“幽灵回调”修改已销毁的组件状态
+  clearTimeout(resizeTimer);
+  clearTimeout(tapActionTimer);
+  clearTimeout(saveTimer);
+
+  // 3. 🎵 彻底释放 TTS 音频资源，防止后台继续缓冲或引发错误
+  if (ttsPlayer.value) {
+    ttsPlayer.value.pause();
+    ttsPlayer.value.removeAttribute('src'); // 移除 src 切断音频流
+    ttsPlayer.value.load(); // 强迫浏览器释放占用
   }
+
+  // 4. 📚 销毁 Epub 实例并解绑事件
+  if (rendition) {
+    // 尽量解除挂载在 rendition 上的自定义事件总线
+    rendition.off('rendered');
+    rendition.off('relocated');
+    rendition.off('selected');
+    rendition.off('mousedown');
+    rendition.off('mouseup');
+    rendition.off('touchstart');
+    rendition.off('touchend');
+  }
+
+  if (epubBook) {
+    epubBook.destroy(); // 销毁 iframe 和底层实例 [cite: 2]
+  }
+
+  // 5. 🧹 终极防线：手动切断庞大对象的引用链，让浏览器的 GC (垃圾回收) 迅速介入
+  epubBook = null;
+  rendition = null;
+  unitMap = [];
+  textNodes = [];
 });
 
 // ✨ 核心修复：带 CSS 渲染缓冲的安全跳转包装器
@@ -840,12 +872,20 @@ const jumpToCfiAndClose = async (cfiOrHref) => {
     }
     
     // 动画结束（200ms）后立马解锁进度雷达
+    // 动画结束（200ms）后立马解锁进度雷达
     setTimeout(() => { 
       isJumpLocked = false; 
       
-      // 主动呼叫雷达，扫描屏幕保存进度
       if (rendition.getContents().length > 0) {
+        // 1. 先呼叫雷达，此时 UI 页码会瞬间变成正确的数字
         handleRelocated(); 
+        
+        // ✨ 2. 雷达跑完后，利用刚刚更新好的页码，强制、立刻、马上给后端发请求！
+        if (currentPage.value !== '-') {
+          const preciseId = `unit-${currentPage.value}`;
+          const total = props.book.total_units ? props.book.total_units - 1 : 1;
+          saveProgressToBackend(preciseId, currentPage.value / total, true); 
+        }
       }
     }, 200);
   }
@@ -1017,34 +1057,36 @@ const handleSelection = (cfiRange, contents) => {
 // ==========================================
 let saveTimer = null;
 
-const saveProgressToBackend = (cfi, progress) => {
-  // 无论如何，先把最新进度刻印在本地 (这里的 cfi 已经是缝合好的 "epubcfi(...)|__|unit-X")
-  localStorage.setItem(`offline_progress_${props.book.id}`, cfi);
-  
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    fetch(`/api/books/${props.book.id}/progress`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'user-token': localStorage.getItem('geek_token') || '',
-        'guest-uuid': localStorage.getItem('guest_uuid') || ''
-      },
-      // 🐛 细节修复：后端 main.py 接收的是 "percent"，这里统一对齐
-      body: JSON.stringify({ cfi: cfi, percent: progress }) 
-    })
-    .then(res => {
-      if (res.ok) {
-        // 🌐 联网保存成功，清理掉可能存在的"待同步"标记
-        localStorage.removeItem(`sync_pending_${props.book.id}`);
-      }
-    })
-    .catch(() => {
-      // 📴 断网打上标记
-      localStorage.setItem(`sync_pending_${props.book.id}`, 'true');
-      console.log("📴 离线保存成功，已打上待同步标记！");
-    });
-  }, 2000);
+const saveProgressToBackend = (cfi, progress, immediate = false) => {
+  localStorage.setItem(`offline_progress_${props.book.id}`, cfi);
+  
+  clearTimeout(saveTimer);
+
+  // 1. 将原有的 fetch 逻辑打包成一个独立动作
+  const sendFetch = () => {
+    fetch(`/api/books/${props.book.id}/progress`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      },
+      body: JSON.stringify({ cfi: cfi, percent: progress }) 
+    })
+    .then(res => {
+      if (res.ok) localStorage.removeItem(`sync_pending_${props.book.id}`);
+    })
+    .catch(() => {
+      localStorage.setItem(`sync_pending_${props.book.id}`, 'true');
+    });
+  };
+
+  // 2. 如果开启了强制开关，立刻执行！否则走常规的 2 秒静默倒计时
+  if (immediate) {
+    sendFetch();
+  } else {
+    saveTimer = setTimeout(sendFetch, 2000);
+  }
 };
 
 // 🚀 极客空降法 (精简版)
