@@ -22,14 +22,24 @@
       ></div>
     </div>
 
-    <div 
-      v-show="showBars" 
-      class="absolute top-0 left-0 right-0 h-16 bg-neutral-900/95 backdrop-blur-md border-b border-neutral-800 flex justify-between items-center px-6 z-40 transition-transform duration-300 animate-fade-in"
-    >
-      <button @click="$emit('close')" class="text-neutral-400 hover:text-white text-sm tracking-widest font-mono transition-colors">
+    <div v-show="showBars" class="absolute top-0 left-0 right-0 h-16 bg-neutral-900/95 backdrop-blur-md border-b border-neutral-800 flex justify-between items-center px-6 z-40 transition-transform duration-300 animate-fade-in">
+      <button @click="$emit('close')" class="text-neutral-400 hover:text-white text-sm tracking-widest font-mono transition-colors z-10">
         ❮ BACK
       </button>
-      <button @click="toggleTTS" class="text-neutral-400 hover:text-white text-sm tracking-widest font-mono flex items-center gap-2 transition-colors">
+
+      <!-- 绝对居中的书签按钮 -->
+      <button @click="toggleBookmark" class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-neutral-400 hover:text-white transition-colors p-2">
+        <!-- 书签已添加：实心白色 -->
+        <svg v-if="isCurrentBookmarked" class="w-6 h-6 text-neutral-100" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/>
+        </svg>
+        <!-- 书签未添加：空心灰色 -->
+        <svg v-else class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2zm0 15l-5-2.18L7 18V5h10v13z"/>
+        </svg>
+      </button>
+
+      <button @click="toggleTTS" class="text-neutral-400 hover:text-white text-sm tracking-widest font-mono flex items-center gap-2 transition-colors z-10">
         <span>{{ isReading ? 'STOP' : 'READ' }}</span>
       </button>
     </div>
@@ -73,7 +83,6 @@
       </div>
       
     <div class="flex-1 overflow-hidden p-8 max-w-3xl mx-auto w-full">
-      
       <ul v-show="activeOverlayTab === 'toc'" class="h-full overflow-y-auto scrollbar-hide pr-2">
         <li v-for="item in tocList" :key="item.id" 
             :id="item.isActive ? 'active-toc-item' : ''"
@@ -83,34 +92,48 @@
           {{ item.label }}
         </li>
       </ul>
-
       <ul v-show="activeOverlayTab === 'bookmarks'" class="h-full overflow-y-auto scrollbar-hide pr-2">
-        <div class="text-center text-neutral-600 mt-20 font-mono text-sm">
-          No data recorded yet.
-        </div>
+        <li v-for="bookmark in bookmarksList" :key="bookmark.id" 
+            @click="jumpToBookmark(bookmark.unit)" 
+            class="cursor-pointer border-b border-neutral-800 py-4 px-3 transition-colors hover:bg-neutral-800/50 group flex flex-col">
+          
+          <!-- 主要显示：书籍文本 (强制严格截断为2行) -->
+          <div class="text-neutral-200 text-sm group-hover:text-white transition-colors mb-3"
+               style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.25rem; max-height: 2.5rem;">
+            {{ bookmark.text }}
+          </div>
+          
+          <!-- 辅助显示：数字与日期 -->
+          <div class="flex justify-between items-center text-[10px] text-neutral-600 font-mono">
+            <span>{{ bookmark.unit }}</span>
+            <span>{{ new Date(bookmark.time).toLocaleDateString() }}</span>
+          </div>
+        </li>
       </ul>
 
+      <!-- 勾注列表 -->
       <ul v-show="activeOverlayTab === 'annotations'" class="h-full overflow-y-auto scrollbar-hide pr-2">
         <li v-for="anno in annotationsList" :key="anno.id" 
             @click="jumpToAnnotationPage(anno)" 
-            class="cursor-pointer border-b border-neutral-800 py-4 px-3 transition-colors hover:bg-neutral-800/50 group">
+            class="cursor-pointer border-b border-neutral-800 py-4 px-3 transition-colors hover:bg-neutral-800/50 group flex flex-col">
           
-          <div class="border-l-2 border-neutral-600 pl-3 group-hover:border-neutral-400 transition-colors">
-            
-            <div class="text-neutral-200 text-sm line-clamp-2 group-hover:text-white transition-colors">
+          <div class="border-l-2 border-neutral-600 pl-3 group-hover:border-neutral-400 transition-colors mb-3">
+            <!-- 勾画的原文 (强制严格截断为2行) -->
+            <div class="text-neutral-200 text-sm group-hover:text-white transition-colors"
+                 style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.25rem; max-height: 2.5rem;">
               {{ anno.text }}
             </div>
-            
-            <div v-if="anno.note" class="text-neutral-400 text-xs line-clamp-2 mt-2">
+            <div v-if="anno.note" class="text-neutral-400 text-xs mt-2"
+                 style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1rem; max-height: 2rem;">
               {{ anno.note }}
             </div>
-            
           </div>
 
-          <div class="text-[10px] text-neutral-600 mt-2 text-right font-mono">
-            {{ new Date(anno.created_at).toLocaleDateString() }}
+          <!-- 底部栏：左侧新增页码，右侧日期 -->
+          <div class="flex justify-between items-center text-[10px] text-neutral-600 font-mono pl-3">
+            <span>{{ getAnnoUnit(anno) }}</span>
+            <span>{{ new Date(anno.created_at).toLocaleDateString() }}</span>
           </div>
-          
         </li>
       </ul>
 
@@ -123,7 +146,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted ,computed} from 'vue';
 import ePub from 'epubjs';
 import SelectionOverlay from './SelectionOverlay.vue';
 const selectionOverlayRef = ref(null);
@@ -176,6 +199,7 @@ const totalPages = ref('-');
 const inputPage = ref('-');
 const currentFontSize = ref(100);
 const annotationsList = ref([]);
+const bookmarksList = ref([]);
 let isJumpLocked = false;
 let resizeTimer = null;
 
@@ -403,7 +427,15 @@ const initReader = async () => {
       // 联网失败则读取本地缓存 [cite: 5]
       savedCfi = localStorage.getItem(progressCacheKey);
     }
-
+    
+    const savedBookmarks = localStorage.getItem(`offline_bookmarks_${props.book.id}`);
+    if (savedBookmarks) {
+      try {
+        bookmarksList.value = JSON.parse(savedBookmarks);
+      } catch (e) {
+        console.warn("书签解析失败");
+      }
+    }
     // 拉取 unit_map.json (用于 unit-X 坐标的精准转换)
     try {
       const mapRes = await fetch(`/api/static/books/${props.book.id}/unit_map.json`);
@@ -964,7 +996,23 @@ const switchToTocTab = () => {
     });
   }
 };
-
+// 从勾注的 segments 数据中提取当前页码 (Unit 数字)
+const getAnnoUnit = (anno) => {
+  if (!anno.segments) return '';
+  try {
+    const parsedSegments = typeof anno.segments === 'string' ? JSON.parse(anno.segments) : anno.segments;
+    if (Array.isArray(parsedSegments) && parsedSegments.length > 0) {
+      const firstSegment = parsedSegments[0];
+      if (firstSegment && firstSegment.nodeX) {
+        const match = firstSegment.nodeX.match(/unit-(\d+)/);
+        return match ? match[1] : '';
+      }
+    }
+  } catch (e) {
+    console.warn("解析勾注页码失败", e);
+  }
+  return '';
+};
 // 点击一条勾注时触发
 const jumpToAnnotationPage = (anno) => {
   let targetUnit = null;
@@ -1000,6 +1048,104 @@ const jumpToAnnotationPage = (anno) => {
     // 如果点不动，能在控制台清晰看到到底传来了什么畸形数据
     console.warn("未能提取到页码，跳转失败！当前的数据是:", anno.segments);
   }
+};
+
+
+// 计算当前页是否已经被加为书签，用于点亮顶部栏图标
+const isCurrentBookmarked = computed(() => {
+  if (currentPage.value === '-') return false;
+  const currentNum = parseInt(currentPage.value, 10);
+  
+  return bookmarksList.value.some(b => {
+    if (typeof b.unit === 'string' && b.unit.includes('-')) {
+      const [start, end] = b.unit.split('-');
+      return currentNum >= parseInt(start, 10) && currentNum <= parseInt(end, 10);
+    }
+    return b.unit == currentNum;
+  });
+});
+
+// 切换书签操作：有则删，无则加，并抓取首尾段范围与文字
+const toggleBookmark = () => {
+  if (currentPage.value === '-') return;
+  const currentNum = parseInt(currentPage.value, 10);
+  
+  // 检查是否已存在（兼容区间匹配）
+  const existingIndex = bookmarksList.value.findIndex(b => {
+    if (typeof b.unit === 'string' && b.unit.includes('-')) {
+      const [start, end] = b.unit.split('-');
+      return currentNum >= parseInt(start, 10) && currentNum <= parseInt(end, 10);
+    }
+    return b.unit == currentNum;
+  });
+
+  if (existingIndex !== -1) {
+    bookmarksList.value.splice(existingIndex, 1);
+  } else {
+    let snippet = '...';
+    let unitRangeToSave = currentPage.value; // 默认兜底
+
+    try {
+      const loc = rendition.currentLocation();
+      if (loc && loc.start?.cfi && loc.end?.cfi) {
+        // 1. 抓取多段文字
+        const startRange = rendition.getRange(loc.start.cfi);
+        const endRange = rendition.getRange(loc.end.cfi);
+        if (startRange && endRange) {
+          const contents = rendition.getContents()[0];
+          const fullScreenRange = contents.document.createRange();
+          fullScreenRange.setStart(startRange.startContainer, startRange.startOffset);
+          fullScreenRange.setEnd(endRange.startContainer, endRange.startOffset);
+          const cleanText = fullScreenRange.toString().trim().replace(/\s+/g, ' ');
+          if (cleanText) {
+            snippet = cleanText.length > 80 ? cleanText.substring(0, 80) + '...' : cleanText;
+          }
+          
+          // ✨ 2. 参考雷达逻辑：扫描物理屏幕上的所有 Unit 锚点
+          const iframeDoc = contents.document;
+          const iframe = iframeDoc.defaultView.frameElement;
+          const iframeOffset = iframe.getBoundingClientRect().left;
+          const viewWidth = window.innerWidth;
+          
+          const targets = Array.from(iframeDoc.querySelectorAll('.sync-anchor'));
+          const visibleAnchors = targets.filter(el => {
+            const rect = el.getBoundingClientRect();
+            const absoluteLeft = rect.left + iframeOffset;
+            // 首段完整出现：左边界必须进入屏幕 (>= -5 容差)
+            // 末段不完整出现：只要头部进入了屏幕就算 (< viewWidth + 5)
+            return absoluteLeft >= -5 && absoluteLeft < viewWidth + 5;
+          });
+          
+          if (visibleAnchors.length > 0) {
+            const firstUnit = visibleAnchors[0].id.match(/unit-(\d+)/)?.[1];
+            const lastUnit = visibleAnchors[visibleAnchors.length - 1].id.match(/unit-(\d+)/)?.[1];
+            if (firstUnit && lastUnit) {
+              unitRangeToSave = firstUnit === lastUnit ? firstUnit : `${firstUnit}-${lastUnit}`;
+            }
+          }
+        }
+      }
+    } catch(e) {
+      console.warn("抓取文字或页面范围失败", e);
+    }
+
+    bookmarksList.value.unshift({
+      id: Date.now(),
+      unit: unitRangeToSave, // 存入精确的区间值，例如 "1145-1194"
+      time: Date.now(),
+      text: snippet
+    });
+  }
+  localStorage.setItem(`offline_bookmarks_${props.book.id}`, JSON.stringify(bookmarksList.value));
+};
+
+// 点击列表跳转并关闭面板
+const jumpToBookmark = (unitRange) => {
+  // 如果是区间 "1145-1194"，强行剥离出首段数字 "1145"
+  const startUnit = String(unitRange).split('-')[0];
+  inputPage.value = parseInt(startUnit, 10);
+  jumpToTargetPage(); 
+  showTocOverlay.value = false;
 };
 // ==========================================
 // 3. 选词高亮与维基反代加载
