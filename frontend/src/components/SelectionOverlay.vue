@@ -132,10 +132,10 @@ const clearTempHighlight = () => {
   }
 };
 // ✨ 修改：跨章渲染核心逻辑（加入防飘遮掩与强行截断动画）
-const renderAnnotationsForCurrentChapter = (contents) => {
+const renderAnnotationsForCurrentChapter = async (contents) => {
   if (!contents || !contents.document) return;
+  
   // 🛡️ 战术 1：切断全局动画！
-  // 注意：这段 style 是注入到 document (Vue 主文档) 的，而不是 iframe 中，彻底掐断高亮 SVG 的飞行动画
   let styleEl = document.getElementById('anti-fly-hl');
   if (!styleEl) {
     styleEl = document.createElement('style');
@@ -152,8 +152,8 @@ const renderAnnotationsForCurrentChapter = (contents) => {
       }
     `;
   }
-  // 🛡️ 战术 2：先发制人，剥夺 Epub.js 的记忆！
-  // 在排版挣扎期，立刻遍历清空 Epub.js 内部对所有高亮的记忆
+  
+  // 🛡️ 战术 2：剥夺 Epub.js 的记忆
   Object.keys(annotationDataMap).forEach(savedCfi => {
     if (props.rendition) {
       try {
@@ -162,32 +162,29 @@ const renderAnnotationsForCurrentChapter = (contents) => {
     }
   });
 
-  // ✨ 核心修复：防抖锁！一巴掌拍死之前排队的定时器，防止网络请求和渲染事件并发导致高亮变亮（重叠）
-  clearTimeout(renderTimer);
+  // 🚀 核心修复：彻底删掉 200ms 的 setTimeout，改为同步阻塞遍历！
+  // 因为父组件已经通过 offsetHeight 强制排版完毕，现在可以直接精准落笔。
+  for (const anno of rawAnnotationsCache) {
+    try {
+      const startNode = contents.document.getElementById(anno.segments[0].nodeX);
+      const endNode = contents.document.getElementById(anno.segments[anno.segments.length - 1].nodeX);
 
-  // 🛡️ 战术 3：排版绝对死透后（200ms），重新精准落笔
-  renderTimer = setTimeout(() => {
-    rawAnnotationsCache.forEach(anno => {
-      try {
-        const startNode = contents.document.getElementById(anno.segments[0].nodeX);
-        const endNode = contents.document.getElementById(anno.segments[anno.segments.length - 1].nodeX);
+      if (startNode && endNode) {
+        const range = contents.document.createRange();
+        range.setStart(startNode.firstChild || startNode, anno.segments[0].startOffset);
+        range.setEnd(endNode.firstChild || endNode, anno.segments[anno.segments.length - 1].endOffset);
 
-        if (startNode && endNode) {
-          const range = contents.document.createRange();
-          range.setStart(startNode.firstChild || startNode, anno.segments[0].startOffset);
-          range.setEnd(endNode.firstChild || endNode, anno.segments[anno.segments.length - 1].endOffset);
-
-          const cfi = contents.cfiFromRange(range);
-
-          // 此时的 anno 已经是绝对最新状态（包含用户刚刚修改过的 note）
-          // 在完全静止的 DOM 和绝对正确的坐标上，精准盖下唯一的章！
-          injectExternalAnnotation(cfi, anno);
-        }
-      } catch (err) {
-        // 节点不在当前章节，静默跳过
+        const cfi = contents.cfiFromRange(range);
+        injectExternalAnnotation(cfi, anno);
       }
-    });
-  }, 200); 
+    } catch (err) {
+      // 节点不在当前章节，静默跳过
+    }
+  }
+
+  // ✨ 终极护盾：由于 injectExternalAnnotation 会向 DOM 注入节点，
+  // 我们在这里强迫当前函数等待一帧，确保所有节点都已经真正挂载，再向父组件放行。
+  await new Promise(resolve => requestAnimationFrame(resolve));
 };
 // --- 核心方法：提取选中坐标 (原封不动) ---
 const extractSegments = (range, doc) => {

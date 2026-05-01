@@ -170,12 +170,20 @@ const props = defineProps({
 const emit = defineEmits(['close']);
 // 🪄 强制等待真实屏幕绘制的黑魔法 (Vue + Iframe 双重护盾版)
 const waitForPaint = async (contents = null) => {
-  // ✨ 核心 1：强迫 Vue 清空渲染队列，把虚拟 DOM 变成真实高亮节点插入进去
+  // 1. 等待 Vue 自身的 DOM 队列彻底清空
   await nextTick(); 
   
+  // 2. ⚡ 核心杀手锏：强制浏览器挂起主线程，立刻计算 iframe 的物理排版！
+  // 读取 offsetHeight 会打断浏览器的惰性渲染，逼迫它把高亮元素的位置算死
+  if (contents && contents.document) {
+    void contents.document.documentElement.offsetHeight;
+  } else {
+    void document.documentElement.offsetHeight;
+  }
+
+  // 3. 等待排版结果真正输出到显示器像素上
   return new Promise(resolve => {
     const targetWindow = (contents && contents.window) ? contents.window : window;
-    // ✨ 核心 2：等待浏览器把包含高亮的真实 DOM 绘制到显示器像素上
     targetWindow.requestAnimationFrame(() => {
       targetWindow.requestAnimationFrame(resolve);
     });
@@ -328,9 +336,6 @@ const handleWindowResize = () => {
         // ✨ 核心修复 2：亲眼看着物理屏幕把带颜色的高亮画好
         await waitForPaint(contents); 
       }
-
-      // 安全缓冲，给 Vue 留出最后一点消化 DOM 的时间
-      await new Promise(resolve => setTimeout(resolve, 150));
 
       // ✨ 核心修复 3：在黑幕揭开前，提前解锁并强行扫雷！
       // 此时还在黑屏状态，我们让雷达在暗中重新扫描排版，
@@ -604,8 +609,6 @@ const initReader = async () => {
         await waitForPaint(contents); 
       }
       
-      // 3. 安全缓冲，给 Vue 留出最后一点消化 DOM 的时间
-      await new Promise(resolve => setTimeout(resolve, 150));
       await waitForPaint();
     };
     
@@ -946,7 +949,6 @@ const jumpToCfiAndClose = async (cfiOrHref) => {
         await selectionOverlayRef.value?.renderAnnotationsForCurrentChapter(finalContents);
         await waitForPaint(finalContents); // 必须等待 iframe 涂上颜色
       }
-      await new Promise(resolve => setTimeout(resolve, 150)); // 安全缓冲
     };
       
     await performJumpAndRender();
@@ -1332,9 +1334,6 @@ const jumpToTargetPage = async () => {
     await waitForPaint(contents); // 死等 iframe 内部物理重绘完毕
   }
 
-  // 给 Vue 一点点余量时间处理后续 DOM 状态
-  await new Promise(resolve => setTimeout(resolve, 150));
-
   showBars.value = false;
 
   // 7. 再次死等主窗口重绘
@@ -1358,51 +1357,44 @@ const cycleFontSize = async () => {
 
     isJumpLocked = true; 
 
-    // 1. 瞬间拉下局部黑幕 (听你的，这里无动画秒切)
+    // 1. 瞬间拉下局部黑幕 (无动画秒切)
     toggleMask(true, { type: 'local', animate: false });
     await waitForPaint();
 
     // 2. 注入新字号 (这会导致异步的 CSS 重排)
     rendition.themes.fontSize(`${currentFontSize.value}%`);   
     
-    // ✨ 核心破局点：强制同步排版 (Synchronous Reflow)
-    // 彻底干掉 50ms 定时器！读取 offsetHeight 会强迫浏览器立刻停下所有动作，
-    // 瞬间把全书每一个字在新字号下的物理位置全部死算完！
-    // 这一句执行完，排版就 100% 绝对稳固了，状态跟 rendition.display() 一模一样！
+    // 3. ✨ 强制同步排版 (Synchronous Reflow)
+    // 彻底干掉定时器！强迫浏览器立刻停下所有动作算排版。
     const tempContents = rendition.getContents()[0];
     if (tempContents) {
       void tempContents.document.documentElement.offsetHeight; 
     }
 
-    // 3. 完美复刻“目录跳转”的执行流 (直接抄作业)
+    // 4. 精准恢复当前位置
     const targetUnit = currentPage.value;  
     if (unitMap.length > 0 && targetUnit !== '-') {
       const mapItem = unitMap.find(m => targetUnit >= m.start && targetUnit <= m.end);
       if (mapItem) {
         const preciseId = `unit-${targetUnit}`;
         
-        // 由于上面强制了排版，这里的 preciseDisplay 算出来的坐标绝对精准
         await preciseDisplay(`${mapItem.href}#${preciseId}`);
         
         const finalContents = rendition.getContents()[0];
         if (finalContents) {
           await selectionOverlayRef.value?.renderAnnotationsForCurrentChapter(finalContents);
-          await waitForPaint(finalContents); // 死等高亮画完
+          await waitForPaint(finalContents); 
         }
       }
     }
 
-    // 4. 抄目录跳转的最后一步：保留 150ms 的 Vue DOM 消化时间
-    await new Promise(resolve => setTimeout(resolve, 150));
-    await waitForPaint();
-
     isJumpLocked = false;
     handleRelocated(); 
 
-    // 5. 瞬间揭开局部黑幕 (无动画，纯硬切，菜单栏不受影响)
+    // 6. 瞬间揭开局部黑幕 (无动画，纯硬切，完美不闪)
     toggleMask(false, { type: 'local', animate: false });
 
-    // 6. 保存进度
+    // 7. 保存进度
     if (currentPage.value !== '-') {
       const total = props.book.total_units ? props.book.total_units - 1 : 1;
       saveProgressToBackend(`unit-${currentPage.value}`, currentPage.value / total, true);
