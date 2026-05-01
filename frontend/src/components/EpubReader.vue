@@ -31,7 +31,7 @@
       ></div>
     </div>
 
-    <div v-show="showBars" class="absolute top-0 left-0 right-0 h-16 bg-neutral-900/95 backdrop-blur-md border-b border-neutral-800 flex justify-between items-center px-6 z-40 transition-transform duration-300 animate-fade-in">
+    <div v-show="showTocOverlay" class="fixed inset-0 bg-neutral-900 z-50 flex flex-col animate-fade-in">
       <button @click="$emit('close')" class="text-neutral-400 hover:text-white text-sm tracking-widest font-mono transition-colors z-10">
         ❮ BACK
       </button>
@@ -78,7 +78,7 @@
       </button>
     </div>
 
-    <div v-if="showTocOverlay" class="fixed inset-0 bg-neutral-900 z-50 flex flex-col animate-fade-in">
+    <div v-show="showTocOverlay" class="fixed inset-0 bg-neutral-900 z-50 flex flex-col animate-fade-in">
       <div class="h-16 border-b border-neutral-800 flex justify-between items-center px-8">
         <button @click="showTocOverlay = false" class="text-neutral-500 hover:text-neutral-200 text-sm tracking-widest transition-colors font-mono">
           ✕ EXIT
@@ -598,11 +598,24 @@ const initReader = async () => {
 
     // ✨ 核心修复：完全抄作业！把初次渲染封装成和跳页一样的异步大招
     const performInitJumpAndRender = async () => {
-      await preciseDisplay(targetLocation || undefined); 
-      await waitForPaint(); 
+      // 1. 底层引擎加载章节和位置
+      await preciseDisplay(targetLocation || undefined);
+      
+      // ✨ 2. 强行核对并渲染高亮，亲眼看着物理屏幕把带颜色的高亮画好
+      const contents = rendition.getContents()[0];
+      if (contents) {
+        await selectionOverlayRef.value?.renderAnnotationsForCurrentChapter(contents);
+        await waitForPaint(contents); 
+      }
+      
+      // 3. 安全缓冲，给 Vue 留出最后一点消化 DOM 的时间
+      await new Promise(resolve => setTimeout(resolve, 150));
+      await waitForPaint();
     };
+    
     await performInitJumpAndRender();
 
+    // 4. 缓慢揭开黑幕
     if (mask) {
       mask.style.transition = 'opacity 0.3s ease';
       mask.style.opacity = '0';
@@ -900,53 +913,59 @@ const openTocOverlay = async () => {
 };
 
 const jumpToCfiAndClose = async (cfiOrHref) => {
-  // 1. 关闭所有 UI 面板
-  showBars.value = false;
-  showTocOverlay.value = false;
+  showBars.value = false;
+  showTocOverlay.value = false;
 
-  // 2. 借用黑幕逻辑
-  const mask = maskRef.value;
-  if (mask) {
-    mask.style.transition = 'none';
-    mask.offsetHeight; 
-    mask.style.opacity = '1';
-    mask.style.pointerEvents = 'auto';
-  }
-  isJumpLocked = true; // 🔒 锁住滚动雷达
+  // ✨ 先让主线程有空把面板隐藏掉
+  await nextTick(); 
 
-  // ✨ 1. 绝对死等：强迫浏览器先把黑幕实打实地渲染到屏幕上
+  const mask = maskRef.value;
+  if (mask) {
+    mask.style.transition = 'none';
+    mask.offsetHeight; 
+    mask.style.opacity = '1';
+    mask.style.pointerEvents = 'auto';
+  }
+  isJumpLocked = true; 
+
   await waitForPaint();
 
-  try {
-    let target = cfiOrHref;
-    let hashId = null;
+  try {
+    let target = cfiOrHref;
+    let hashId = null;
 
-    if (typeof target === 'string' && target.includes('#')) {
-      const [base, hash] = target.split('#');
-      hashId = decodeURIComponent(hash);
-      target = `${base}#${hashId}`;
-    }
+    if (typeof target === 'string' && target.includes('#')) {
+      const [base, hash] = target.split('#');
+      hashId = decodeURIComponent(hash);
+      target = `${base}#${hashId}`;
+    }
 
-    // ✨ 2. 封装：把“跳页 -> 找精确锚点 -> 画高亮”这套高负载动作打包成一个异步任务
     const performJumpAndRender = async () => {
       await rendition.display(target);
       if (hashId) {
         await waitForPaint();
-        const contents = rendition.getContents()[0];
-        if (contents) {
-          const targetNode = contents.document.getElementById(hashId);
+        const tempContents = rendition.getContents()[0];
+        if (tempContents) {
+          const targetNode = tempContents.document.getElementById(hashId);
           if (targetNode) {
-            const preciseCfi = contents.cfiFromNode(targetNode);
+            const preciseCfi = tempContents.cfiFromNode(targetNode);
             await rendition.display(preciseCfi); 
           }
         }
       }
-      await waitForPaint();
+      
+      // ✨ 核心补丁：目录跳完之后，强行触发一次高亮渲染，并在黑幕下死等它画完！
+      const finalContents = rendition.getContents()[0];
+      if (finalContents) {
+        await selectionOverlayRef.value?.renderAnnotationsForCurrentChapter(finalContents);
+        await waitForPaint(finalContents); // 必须等待 iframe 涂上颜色
+      }
+      await new Promise(resolve => setTimeout(resolve, 150)); // 安全缓冲
     };
       
     await performJumpAndRender();
 
-  } catch (error) {
+  } catch (error) {
     console.error("跳转失败:", error);
   } finally {
     // 5. 缓慢揭开黑幕
@@ -955,7 +974,6 @@ const jumpToCfiAndClose = async (cfiOrHref) => {
       mask.style.opacity = '0';
       mask.style.pointerEvents = 'none';
     }
-    
     isJumpLocked = false; 
     
     if (rendition.getContents().length > 0) {
@@ -1040,24 +1058,16 @@ const getAnnoUnit = (anno) => {
   return '';
 };
 // 点击一条勾注时触发
-const jumpToAnnotationPage = (anno) => {
+const jumpToAnnotationPage = async (anno) => {
   let targetUnit = null;
-
-  // 1. 强力解包：对准后端的 nodeX 字段提取
   if (anno.segments) {
     try {
       const parsedSegments = typeof anno.segments === 'string' ? JSON.parse(anno.segments) : anno.segments;
-      
-      // 检查数组并且拿到第一个选中片段
       if (Array.isArray(parsedSegments) && parsedSegments.length > 0) {
         const firstSegment = parsedSegments[0];
-        
-        // 关键修复：你的后端定义的键名是 nodeX，值类似 "unit-123"
         if (firstSegment && firstSegment.nodeX) {
           const match = firstSegment.nodeX.match(/unit-(\d+)/);
-          if (match) {
-            targetUnit = match[1];
-          }
+          if (match) targetUnit = match[1];
         }
       }
     } catch (e) {
@@ -1065,13 +1075,13 @@ const jumpToAnnotationPage = (anno) => {
     }
   }
 
-  // 2. 核心闭环：走极客空降法
   if (targetUnit !== null) {
     inputPage.value = parseInt(targetUnit, 10);
-    jumpToTargetPage(); 
-    showTocOverlay.value = false;
+    
+    showTocOverlay.value = false; // 1. 瞬间隐藏面板
+    await nextTick();             // 2. 释放主线程
+    await jumpToTargetPage();     // 3. ✨ 闭环：死等渲染完毕
   } else {
-    // 如果点不动，能在控制台清晰看到到底传来了什么畸形数据
     console.warn("未能提取到页码，跳转失败！当前的数据是:", anno.segments);
   }
 };
@@ -1142,12 +1152,13 @@ const toggleBookmark = () => {
 };
 
 // 点击列表跳转并关闭面板
-const jumpToBookmark = (unitRange) => {
-  // 如果是区间 "1145-1194"，强行剥离出首段数字 "1145"
+const jumpToBookmark = async (unitRange) => {
   const startUnit = String(unitRange).split('-')[0];
   inputPage.value = parseInt(startUnit, 10);
-  jumpToTargetPage(); 
+  
   showTocOverlay.value = false;
+  await nextTick();    
+  await jumpToTargetPage();
 };
 // ==========================================
 // 3. 选词高亮与维基反代加载
@@ -1308,26 +1319,32 @@ const jumpToTargetPage = async () => {
   
   // ✨ 4. 绝对死等：强迫浏览器把黑幕渲染到物理屏幕上
   await waitForPaint();
-  
-  // 5. 并行执行“渲染空降”和“最短黑屏倒计时”
-  await Promise.all([
-    preciseDisplay(`${mapItem.href}#${preciseId}`),
-    new Promise(resolve => setTimeout(resolve, 300)) // ⏱️ 最短黑幕时间
-  ]);
-  
+
+  // ✨ 5. 去掉原来的 Promise.all 倒计时，改成顺序严格执行
+  await preciseDisplay(`${mapItem.href}#${preciseId}`);
+
+  // ✨ 6. 核心补丁：无论是不是跨章跳跃，强行命令组件重新核对并渲染一次高亮！
+  const contents = rendition.getContents()[0];
+  if (contents) {
+    await selectionOverlayRef.value?.renderAnnotationsForCurrentChapter(contents);
+    await waitForPaint(contents); // 死等 iframe 内部物理重绘完毕
+  }
+
+  // 给 Vue 一点点余量时间处理后续 DOM 状态
+  await new Promise(resolve => setTimeout(resolve, 150));
+
   showBars.value = false;
 
-  // ✨ 6. 再次死等：确保空降后的底层排版已经彻底画好
+  // 7. 再次死等主窗口重绘
   await waitForPaint();
 
-  // 7. 缓慢揭开黑幕
+  //8. 缓慢揭开黑幕
   if (mask) {
     mask.style.transition = 'opacity 0.2s ease';
     mask.style.opacity = '0';
     mask.style.pointerEvents = 'none';
   }
   
-  // 8. 解锁进度雷达
   isJumpLocked = false;
   handleRelocated();
 };
@@ -1472,8 +1489,8 @@ const jumpToNextChapter = async () => {
   inset: 0;
   background-color: #000000;
   z-index: 9999;
-  opacity: 0;
-  pointer-events: none; /* 默认状态下允许点击穿透 */
+  opacity: 1;
+  pointer-events: auto; /* 默认状态下允许点击穿透 */
   transition: opacity 0.3s ease; /* 默认带有淡出动画 */
 }
 
