@@ -794,11 +794,9 @@ const setupIframeClick = () => {
       
       // 5. 按照绝对的三等分区域进行判断，彻底打通任督二脉！
       if (absoluteX < screenWidth * 0.3) {
-        isTurningPage.value = true;
-        rendition.prev();
+        turnPage('prev'); // 替换 isTurningPage.value = true; rendition.prev();
       } else if (absoluteX > screenWidth * 0.7) {
-        isTurningPage.value = true;
-        rendition.next();
+        turnPage('next'); // 替换 isTurningPage.value = true; rendition.next();
       } else {
         showBars.value = !showBars.value; 
       }
@@ -818,11 +816,9 @@ const handleTouch = (event) => {
   const width = rect.width;
   if (showTocOverlay.value || selectionOverlayRef.value?.isAnyUIOpen()) return;
   if (clickX < width * 0.3) {
-    isTurningPage.value = true;
-    rendition.prev();
+    turnPage('prev'); // 替换
   } else if (clickX > width * 0.7) {
-    isTurningPage.value = true;
-    rendition.next();
+    turnPage('next'); // 替换
   } else {
     showBars.value = !showBars.value;
   }
@@ -1381,6 +1377,54 @@ const jumpToTargetPage = async () => {
   
   isJumpLocked = false;
   handleRelocated();
+};
+
+const turnPage = async (direction) => {
+  isTurningPage.value = true;
+  let isCrossChapter = false;
+
+  // 1. 🔍 预判：基于藏宝图和当前屏幕视野，判断是否即将跨章
+  if (unitMap.length > 0 && visibleUnitRange.value.start !== -1) {
+    const currentMapItem = unitMap.find(m => visibleUnitRange.value.start >= m.start && visibleUnitRange.value.start <= m.end);
+    if (currentMapItem) {
+      // 如果下一页，且当前屏幕已经包含了本章最后一个 unit
+      if (direction === 'next' && visibleUnitRange.value.end >= currentMapItem.end) {
+        isCrossChapter = true;
+      } 
+      // 如果上一页，且当前屏幕包含了本章第一个 unit
+      else if (direction === 'prev' && visibleUnitRange.value.start <= currentMapItem.start) {
+        isCrossChapter = true;
+      }
+    }
+  }
+
+  // 2. 🎬 跨章前夕：瞬间拉下局部黑幕并锁死雷达
+  if (isCrossChapter) {
+    isJumpLocked = true;
+    toggleMask(true, { type: 'local', animate: false }); // 纯硬切黑幕，不干扰全局
+    await waitForPaint();
+  }
+
+  // 3. ⚡ 执行物理翻页
+  if (direction === 'next') {
+    await rendition.next();
+  } else {
+    await rendition.prev();
+  }
+
+  // 4. 落地核验：如果是跨章，死等高亮画完再揭幕
+  if (isCrossChapter) {
+    const contents = rendition.getContents()[0];
+    if (contents) {
+      await selectionOverlayRef.value?.renderAnnotationsForCurrentChapter(contents);
+      await waitForPaint(contents); // 核心：死等 iframe 内部把颜色填好
+    }
+    toggleMask(false, { type: 'local' }); // 缓慢揭开黑幕
+    isJumpLocked = false;
+    handleRelocated(); // 黑幕揭开瞬间，立刻同步雷达
+  }
+  
+  // 注意：isTurningPage 会在你的 handleRelocated 触发的 'relocated' 事件回调中被安全重置为 false
 };
 
 const cycleFontSize = async () => {
