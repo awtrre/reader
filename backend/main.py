@@ -72,6 +72,11 @@ class AnnotationSyncRequest(BaseModel):
     segments: list[SegmentItem]
     note: Optional[str] = ""
 
+class BookmarkSyncRequest(BaseModel):
+    id: int
+    unit: int
+    time: int
+    text: str
 # -----------------------------------------------------------------
 # 🛠️ 炼金工坊核心工具：EPUB 爆破术
 # -----------------------------------------------------------------
@@ -641,6 +646,54 @@ async def delete_annotation(book_id: str, payload: AnnotationSyncRequest, user_t
         await db.commit()
         
     return {"status": "success", "message": "岁月痕迹已抹除"}
+
+@app.get("/api/books/{book_id}/bookmarks")
+async def get_bookmarks(book_id: str, user_token: Optional[str] = Header(None), guest_uuid: Optional[str] = Header(None)):
+    from database import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        user_id = await get_current_user_id(db, user_token, guest_uuid)
+        db.row_factory = aiosqlite.Row
+        
+        # 按照时间倒序返回，最新的书签在最上面
+        cursor = await db.execute(
+            "SELECT id, unit, time, text FROM bookmarks WHERE user_id = ? AND book_id = ? ORDER BY time DESC",
+            (user_id, book_id)
+        )
+        rows = await cursor.fetchall()
+        
+        result = [{"id": row["id"], "unit": row["unit"], "time": row["time"], "text": row["text"]} for row in rows]
+        return {"status": "success", "bookmarks": result}
+
+@app.post("/api/books/{book_id}/bookmarks")
+async def sync_bookmark(book_id: str, payload: BookmarkSyncRequest, user_token: Optional[str] = Header(None), guest_uuid: Optional[str] = Header(None)):
+    from database import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        user_id = await get_current_user_id(db, user_token, guest_uuid)
+        
+        # UPSERT 逻辑：没有就插入，如果有同 ID 的就更新
+        await db.execute("""
+            INSERT INTO bookmarks (id, user_id, book_id, unit, time, text)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id, user_id) DO UPDATE SET text = excluded.text
+        """, (payload.id, user_id, book_id, payload.unit, payload.time, payload.text))
+        await db.commit()
+        
+    return {"status": "success", "message": "书签已夹入书中"}
+
+@app.delete("/api/books/{book_id}/bookmarks/{bookmark_id}")
+async def delete_bookmark(book_id: str, bookmark_id: int, user_token: Optional[str] = Header(None), guest_uuid: Optional[str] = Header(None)):
+    from database import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        user_id = await get_current_user_id(db, user_token, guest_uuid)
+        
+        # 精准摧毁：必须是这本书、这个用户、且 ID 匹配的书签
+        await db.execute(
+            "DELETE FROM bookmarks WHERE id = ? AND user_id = ? AND book_id = ?", 
+            (bookmark_id, user_id, book_id)
+        )
+        await db.commit()
+        
+    return {"status": "success", "message": "书签已移除"}
 # -----------------------------------------------------------------
 # 🗣️ 赛博伴读 (Piper TTS 调用)
 # -----------------------------------------------------------------

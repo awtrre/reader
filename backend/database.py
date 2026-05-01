@@ -80,6 +80,21 @@ async def init_db():
             )
         """)
 
+        # 5. 📑 魔法书签表 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER,                 -- 前端传来的时间戳 ID
+                user_id INTEGER,            -- 归属的魔法师
+                book_id TEXT,               -- 归属的书籍
+                unit INTEGER,               -- 书签所在的页码/单元
+                time INTEGER,               -- 创建时间戳
+                text TEXT,                  -- 截取的原文内容
+                PRIMARY KEY (id, user_id),  -- 联合主键，防止极小概率的时间戳撞车
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            )
+        """)
+
         await db.commit()
         logging.info("✨ 记忆中枢构建完毕！所有的表都已经乖乖就位啦！")
 
