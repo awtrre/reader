@@ -455,12 +455,27 @@ const initReader = async () => {
       savedCfi = localStorage.getItem(progressCacheKey);
     }
     
-    const savedBookmarks = localStorage.getItem(`offline_bookmarks_${props.book.id}`);
-    if (savedBookmarks) {
-      try {
-        bookmarksList.value = JSON.parse(savedBookmarks);
-      } catch (e) {
-        console.warn("书签解析失败");
+    try {
+      const bookmarkRes = await fetch(`/api/books/${props.book.id}/bookmarks`, {
+        headers: {
+          'user-token': localStorage.getItem('geek_token') || '',
+          'guest-uuid': localStorage.getItem('guest_uuid') || ''
+        }
+      });
+      if (bookmarkRes.ok) {
+        const bookmarkData = await bookmarkRes.json();
+        if (bookmarkData.bookmarks && Array.isArray(bookmarkData.bookmarks)) {
+          bookmarksList.value = bookmarkData.bookmarks;
+          localStorage.setItem(`offline_bookmarks_${props.book.id}`, JSON.stringify(bookmarksList.value));
+        }
+      } else {
+        throw new Error('云端接口异常');
+      }
+    } catch (e) {
+      console.warn("书签同步失败，降级使用本地缓存", e);
+      const savedBookmarks = localStorage.getItem(`offline_bookmarks_${props.book.id}`);
+      if (savedBookmarks) {
+        try { bookmarksList.value = JSON.parse(savedBookmarks); } catch (err) {}
       }
     }
     // 拉取 unit_map.json (用于 unit-X 坐标的精准转换)
@@ -1082,7 +1097,6 @@ const isCurrentBookmarked = computed(() => {
 const toggleBookmark = () => {
   if (currentPage.value === '-') return;
   
-  // 找出当前屏幕内所有书签的索引
   const existingIndexes = bookmarksList.value.reduce((acc, b, index) => {
     const bUnit = parseInt(String(b.unit).split('-')[0], 10);
     if (bUnit >= visibleUnitRange.value.start && bUnit <= visibleUnitRange.value.end) {
@@ -1092,12 +1106,22 @@ const toggleBookmark = () => {
   }, []);
 
   if (existingIndexes.length > 0) {
-    // 如果当前屏幕范围内有书签，逆序遍历删除（防止数组塌陷错位）
+    // 1. 删除：逆序遍历删除
     existingIndexes.reverse().forEach(idx => {
-      bookmarksList.value.splice(idx, 1);
+      const targetBookmark = bookmarksList.value[idx];
+      bookmarksList.value.splice(idx, 1); // 瞬间从界面消失
+      
+      // ✨ 异步发送删除请求给后端
+      fetch(`/api/books/${props.book.id}/bookmarks/${targetBookmark.id}`, {
+        method: 'DELETE',
+        headers: {
+          'user-token': localStorage.getItem('geek_token') || '',
+          'guest-uuid': localStorage.getItem('guest_uuid') || ''
+        }
+      }).catch(e => console.warn("书签云端删除失败", e));
     });
   } else {
-    // 如果屏幕里一个书签都没有，依然只存入当前页的第一个完整出现的 unit (currentPage)
+    // 2. 添加：抓取文本并生成新书签
     let snippet = '...';
     try {
       const loc = rendition.currentLocation();
@@ -1119,14 +1143,27 @@ const toggleBookmark = () => {
       console.warn("抓取文字或页面范围失败", e);
     }
 
-    bookmarksList.value.unshift({
-      id: Date.now(),
-      unit: currentPage.value, // 只存首个数字
+    const newBookmark = {
+      id: Date.now(), // 毫秒时间戳作为 ID
+      unit: currentPage.value,
       time: Date.now(),
       text: snippet
-    });
+    };
+    bookmarksList.value.unshift(newBookmark); // 瞬间点亮书签图标
+
+    // ✨ 异步发送保存请求给后端
+    fetch(`/api/books/${props.book.id}/bookmarks`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      },
+      body: JSON.stringify(newBookmark)
+    }).catch(e => console.warn("书签云端保存失败", e));
   }
   
+  // 无论增删，兜底更新本地缓存
   localStorage.setItem(`offline_bookmarks_${props.book.id}`, JSON.stringify(bookmarksList.value));
 };
 
