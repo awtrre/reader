@@ -218,7 +218,7 @@ const maskRef = ref(null);
 // --- 数据与分页状态 ---
 const tocList = ref([]);
 const currentPage = ref('-');
-const totalPages = ref('-');
+const totalPages = ref(1);
 const inputPage = ref('-');
 const visibleUnitRange = ref({ start: -1, end: -1 });
 const currentFontSize = ref(100);
@@ -610,7 +610,11 @@ const initReader = async () => {
     // 同步 UI 状态
     currentPage.value = initialPageNumber;
     inputPage.value = initialPageNumber;
-    totalPages.value = props.book.total_units ? props.book.total_units - 1 : '-';
+    if (unitMap.length > 0) {
+      totalPages.value = unitMap[unitMap.length - 1].end;
+    } else if (props.book.total_units) {
+      totalPages.value = props.book.total_units - 1;
+    }
 
     await loadSavedAnnotations(props.book.id, rendition); // 先拿批注数据
 
@@ -687,7 +691,7 @@ const initReader = async () => {
             inputPage.value = currentUnit;
             visibleUnitRange.value = { start: currentUnit, end: lastUnit }; 
 
-            const total = props.book.total_units ? props.book.total_units - 1 : 1;
+            const total = totalPages.value || 1;
             saveProgressToBackend(firstAnchor.id, currentUnit / total); 
           }
         }
@@ -978,7 +982,7 @@ const jumpToCfiAndClose = async (cfiOrHref) => {
       
       if (currentPage.value !== '-') {
         const preciseId = `unit-${currentPage.value}`;
-        const total = props.book.total_units ? props.book.total_units - 1 : 1;
+        const total = totalPages.value || 1;
         saveProgressToBackend(preciseId, currentPage.value / total, true); 
       }
     }
@@ -1247,7 +1251,7 @@ const handleRelocated = (location) => {
         visibleUnitRange.value = { start: firstUnit, end: lastUnit }; 
 
         // 上报进度时，也精准上报 targetUnit，而不是盲目上报 visibleAnchors[0]
-        const total = props.book.total_units ? props.book.total_units - 1 : 1;
+        const total = totalPages.value || 1;
         saveProgressToBackend(`unit-${targetUnit}`, targetUnit / total); 
       }
     }
@@ -1480,7 +1484,7 @@ const cycleFontSize = async () => {
 
     // 7. 保存进度
     if (currentPage.value !== '-') {
-      const total = props.book.total_units ? props.book.total_units - 1 : 1;
+      const total = totalPages.value || 1;
       saveProgressToBackend(`unit-${currentPage.value}`, currentPage.value / total, true);
     }
 
