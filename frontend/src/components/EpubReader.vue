@@ -453,6 +453,8 @@ const initReader = async () => {
     } catch (e) {
       // 联网失败则读取本地缓存 [cite: 5]
       savedCfi = localStorage.getItem(progressCacheKey);
+      const savedFont = localStorage.getItem(`offline_font_size_${props.book.id}`);
+      if (savedFont) currentFontSize.value = parseInt(savedFont, 10);
     }
     
     try {
@@ -1300,34 +1302,35 @@ const toggleMask = (visible, options = {}) => {
 };
 
 const saveProgressToBackend = (cfi, progress, immediate = false) => {
-  localStorage.setItem(`offline_progress_${props.book.id}`, cfi);
-  
-  clearTimeout(saveTimer);
+  localStorage.setItem(`offline_font_size_${props.book.id}`, currentFontSize.value);
+  
+  clearTimeout(saveTimer);
 
   // 1. 将原有的 fetch 逻辑打包成一个独立动作
   const sendFetch = () => {
-    fetch(`/api/books/${props.book.id}/progress`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'user-token': localStorage.getItem('geek_token') || '',
-        'guest-uuid': localStorage.getItem('guest_uuid') || ''
-      },
-      body: JSON.stringify({ cfi: cfi, percent: progress }) 
-    })
-    .then(res => {
-      if (res.ok) localStorage.removeItem(`sync_pending_${props.book.id}`);
-    })
-    .catch(() => {
-      localStorage.setItem(`sync_pending_${props.book.id}`, 'true');
-    });
+    fetch(`/api/books/${props.book.id}/progress`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'user-token': localStorage.getItem('geek_token') || '',
+        'guest-uuid': localStorage.getItem('guest_uuid') || ''
+      },
+      // ✨ 重点在这里：补充 font_size
+      body: JSON.stringify({ cfi: cfi, percent: progress, font_size: currentFontSize.value }) 
+    })
+    .then(res => {
+      if (res.ok) localStorage.removeItem(`sync_pending_${props.book.id}`);
+    })
+    .catch(() => {
+      localStorage.setItem(`sync_pending_${props.book.id}`, 'true');
+    });
   };
 
   // 2. 如果开启了强制开关，立刻执行！否则走常规的 2 秒静默倒计时
   if (immediate) {
     sendFetch();
   } else {
-    saveTimer = setTimeout(sendFetch, 2000);
+    saveTimer = setTimeout(sendFetch, 2000);
   }
 };
 
